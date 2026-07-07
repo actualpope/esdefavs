@@ -207,20 +207,18 @@ Viktige filer/mapper:
 Collections
 ===========
 
-Programmet skal ikke lage en samlet Steam collection kalt “ES-DE Favorites”.
+Programmet skal lage en samlet Steam collection kalt “ES-DE Favorites”.
 
-Spillene skal bare havne i konsollens vanlige SRM-collection, slik SRM ellers organiserer biblioteket.
+Spillene skal samtidig havne i konsollens vanlige SRM-collection, slik SRM ellers organiserer biblioteket.
 
 Eksempel:
 
 Riktig:
+    ES-DE Favorites
     Nintendo Game Boy Advance
     Nintendo GameCube
 
-Ikke ønsket:
-    ES-DE Favorites
-
-Hvis eksisterende programskapte parsere har “ES-DE Favorites” som ekstra collection, skal programmet rense det bort fra våre egne parsere.
+Hvis eksisterende programskapte parsere mangler “ES-DE Favorites” som ekstra collection, skal programmet legge den til igjen på våre egne parsere.
 
 
 Add/remove må være én samlet “oppdater”
@@ -438,8 +436,8 @@ Manuell “Oppdater Steam nå” fungerer som ønsket:
 
 - legger til nye favoritter
 - fjerner gamle favoritter
-- unngår ekstra samlet “ES-DE Favorites”-collection
-- bruker konsollens SRM collection
+- lager samlet “ES-DE Favorites”-collection
+- bruker også konsollens SRM collection
 - matcher SRM-shortcuts mer tolerant ved fjerning
 
 

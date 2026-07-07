@@ -17,7 +17,7 @@ from .srm_preview import _find_parser
 
 OWNED_PARSER_PREFIX = "emudeck-favorites-sync:"
 OWNED_TITLE_PREFIX = "ES-DE Favorites Sync"
-REMOVED_STEAM_CATEGORIES = {"es-de favorites"}
+FAVORITES_COLLECTION = "ES-DE Favorites"
 
 
 @dataclass
@@ -165,13 +165,13 @@ def _manual_entry(entry: Any, parser: dict[str, Any], environment: dict[str, str
     }
 
 
-def _clean_steam_categories(categories: Any) -> list[str]:
+def _steam_categories_with_favorites(categories: Any) -> list[str]:
+    cleaned = [FAVORITES_COLLECTION]
     if not isinstance(categories, list):
-        return []
-    cleaned: list[str] = []
+        return cleaned
     for item in categories:
         value = str(item)
-        if value.casefold() in REMOVED_STEAM_CATEGORIES:
+        if value.casefold() == FAVORITES_COLLECTION.casefold():
             continue
         cleaned.append(value)
     return list(dict.fromkeys(cleaned))
@@ -180,9 +180,10 @@ def _clean_steam_categories(categories: Any) -> list[str]:
 def _manual_parser_from_source(source: dict[str, Any], system: str, manual_dir: Path) -> dict[str, Any]:
     parser = copy.deepcopy(source)
     category = ""
-    categories = _clean_steam_categories(source.get("steamCategories"))
-    if categories:
-        category = str(categories[0])
+    categories = _steam_categories_with_favorites(source.get("steamCategories"))
+    console_categories = [item for item in categories if item.casefold() != FAVORITES_COLLECTION.casefold()]
+    if console_categories:
+        category = str(console_categories[0])
     parser["parserId"] = f"{OWNED_PARSER_PREFIX}{system}"
     parser["configTitle"] = f"{OWNED_TITLE_PREFIX} - {category or system}"
     parser["parserType"] = "Manual"
@@ -214,7 +215,7 @@ def _preserve_owned_parser(parser: dict[str, Any], system: str, manual_dir: Path
     preserved["executableArgs"] = ""
     preserved["startInDirectory"] = ""
     preserved["titleModifier"] = "${fuzzyTitle}"
-    preserved["steamCategories"] = _clean_steam_categories(preserved.get("steamCategories"))
+    preserved["steamCategories"] = _steam_categories_with_favorites(preserved.get("steamCategories"))
     return preserved
 
 

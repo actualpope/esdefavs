@@ -275,8 +275,7 @@ class ScannerTests(unittest.TestCase):
         owned = [item for item in configs if item["parserId"] == "emudeck-favorites-sync:gba"]
         self.assertEqual(len(owned), 1)
         self.assertEqual(owned[0]["parserType"], "Manual")
-        self.assertEqual(owned[0]["steamCategories"], ["Nintendo Game Boy Advance"])
-        self.assertNotIn("ES-DE Favorites", owned[0]["steamCategories"])
+        self.assertEqual(owned[0]["steamCategories"], ["ES-DE Favorites", "Nintendo Game Boy Advance"])
         manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/gba/favorites.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(manifest[0]["target"], "/usr/bin/retroarch")
@@ -302,7 +301,7 @@ class ScannerTests(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(manifest, [])
 
-    def test_apply_cleans_old_esde_favorites_collection_from_preserved_parser(self) -> None:
+    def test_apply_keeps_shared_esde_favorites_collection_on_preserved_parser(self) -> None:
         self.fx.add_system("gba", gamelist(game("./Game.zip", "Game", favorite="false")), ("Game.zip",))
         parser_dir = self.add_srm_gba_parser()
         configs = json.loads((parser_dir / "userConfigurations.json").read_text(encoding="utf-8"))
@@ -321,7 +320,7 @@ class ScannerTests(unittest.TestCase):
         updated = json.loads((parser_dir / "userConfigurations.json").read_text(encoding="utf-8"))
         owned = [item for item in updated if item["parserId"] == "emudeck-favorites-sync:gba"]
         self.assertEqual(len(owned), 1)
-        self.assertEqual(owned[0]["steamCategories"], ["Nintendo Game Boy Advance"])
+        self.assertEqual(owned[0]["steamCategories"], ["ES-DE Favorites", "Nintendo Game Boy Advance"])
         manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/gba/favorites.json"
         self.assertEqual(json.loads(manifest_path.read_text(encoding="utf-8")), [])
 

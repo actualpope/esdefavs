@@ -1,4 +1,4 @@
-# EmuDeck Favorites Sync 0.6.17
+# EmuDeck Favorites Sync 0.6.18
 
 Et lite Steam Deck-program som syncer ES-DE-favoritter til Steam.
 
@@ -111,7 +111,7 @@ Vanlig bruk er bare:
 - Status viser nå også når autosync sist sjekket og om Steam sist ble sett som running eller stopped.
 - Mens SRM `add` kjøres, aktiveres bare `ES-DE Favorites Sync`-parserne midlertidig.
 - Andre SRM-parsere settes tilbake slik de var etterpå.
-- Spillene legges bare i konsollens vanlige SRM-collection, ikke i en ekstra samlet `ES-DE Favorites`-collection.
+- Spillene legges både i en samlet `ES-DE Favorites`-collection og i konsollens vanlige SRM-collection.
 - Favorittsync-parserne blir liggende i SRM selv om en konsoll akkurat nå har null favoritter; manifestet blir bare tomt.
 
 ## Hvis programmet ikke finner Steam ROM Manager

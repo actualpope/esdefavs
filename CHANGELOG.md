@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.18 — 2026-07-07
+
+- Legger tilbake samlet Steam collection `ES-DE Favorites` for alle favorittspill.
+- Favorittspill legges nå både i `ES-DE Favorites` og i konsollens vanlige SRM-collection.
+
 ## 0.6.17 — 2026-07-07
 
 - Kontrollpanelet viser nå installert programversjon i menyvinduet.
