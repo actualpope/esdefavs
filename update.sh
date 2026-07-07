@@ -22,7 +22,7 @@ if [[ ! -d "$SOURCE_DIR/.git" ]]; then
   echo "  $SOURCE_DIR"
   echo
   echo "Install from a Git clone first, for example:"
-  echo "  git clone https://github.com/actualpope/esdefavs.git"
+  echo "  git clone -b main https://github.com/actualpope/esdefavs.git"
   echo "  cd esdefavs"
   echo "  bash install.sh"
   exit 2

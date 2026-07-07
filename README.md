@@ -23,7 +23,7 @@ Anbefalt installasjon er nå via GitHub, slik at programmet kan oppdateres sener
 ```bash
 mkdir -p ~/Applications
 cd ~/Applications
-git clone https://github.com/actualpope/esdefavs.git
+git clone -b main https://github.com/actualpope/esdefavs.git
 cd esdefavs
 bash install.sh
 ```
