@@ -1,4 +1,4 @@
-# EmuDeck Favorites Sync 0.6.12
+# EmuDeck Favorites Sync 0.6.13
 
 Et lite Steam Deck-program som syncer ES-DE-favoritter til Steam.
 
@@ -14,19 +14,43 @@ Hvis EmuDeck er installert på SD-kort, leter programmet også etter SRM direkte
 /run/media/deck/FF4Y7/Emulation/tools/
 ```
 
-## Installer
+## Installer fra GitHub
 
-Pakk ut ZIP-en og åpne `EmuDeck Favorites Sync.desktop` fra mappen.
+Anbefalt installasjon er nå via GitHub, slik at programmet kan oppdateres senere uten nye ZIP-filer.
 
-Hvis Deck spør om filen skal kjøres: velg å kjøre den. Første gang vil kontrollpanelet spørre om programmet skal installeres.
-
-Du kan også installere manuelt fra terminal:
+Åpne Konsole på Steam Deck og kjør:
 
 ```bash
+mkdir -p ~/Applications
+cd ~/Applications
+git clone https://github.com/actualpope/esdefavs.git
+cd esdefavs
 bash install.sh
 ```
 
-Hvis du har klonet prosjektet fra GitHub, kan du senere oppdatere fra samme mappe:
+Etterpå åpner du kontrollpanelet herfra:
+
+```text
+~/.local/share/emudeck-favorites-sync/EmuDeck Favorites Sync.desktop
+```
+
+Du kan også åpne desktop-filen direkte fra mappen over i Dolphin.
+
+## Oppdater senere
+
+Når det kommer nye endringer på GitHub, kan du oppdatere fra kontrollpanelet:
+
+```text
+Oppdater programmet fra GitHub
+```
+
+Eller fra terminal:
+
+```bash
+bash ~/.local/share/emudeck-favorites-sync/update.sh
+```
+
+Hvis du står i GitHub-mappen kan du også kjøre:
 
 ```bash
 bash update.sh
@@ -48,6 +72,7 @@ Der får du en enkel meny:
 - Skru av automatisk sync
 - Status og favoritter
 - Oppdater Steam nå
+- Oppdater programmet fra GitHub
 - Velg SRM AppImage
 - Importer stagede favoritter til Steam nå
 - Lag feilsøkingsrapport

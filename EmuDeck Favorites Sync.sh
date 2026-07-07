@@ -39,6 +39,7 @@ choose() {
       off "Skru av automatisk sync" \
       status "Status og favoritter" \
       now "Oppdater Steam nå" \
+      update "Oppdater programmet fra GitHub" \
       choose_srm "Velg SRM AppImage" \
       import "Importer stagede favoritter til Steam nå" \
       report "Lag feilsøkingsrapport" \
@@ -49,6 +50,7 @@ choose() {
       off "Skru av automatisk sync" \
       status "Status og favoritter" \
       now "Oppdater Steam nå" \
+      update "Oppdater programmet fra GitHub" \
       choose_srm "Velg SRM AppImage" \
       import "Importer stagede favoritter til Steam nå" \
       report "Lag feilsøkingsrapport" \
@@ -108,6 +110,9 @@ while true; do
       ;;
     now)
       run_and_show "Oppdater Steam nå" "$APP" autosync-now
+      ;;
+    update)
+      run_and_show "Oppdater programmet" bash "$HERE/update.sh"
       ;;
     choose_srm)
       if have kdialog; then

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.13 — 2026-07-07
+
+- Legger til `Oppdater programmet fra GitHub` i kontrollpanelet.
+- `install.sh` lagrer nå hvor GitHub-klonen ligger, slik at installert `update.sh` kan kjøre `git pull` fra riktig mappe.
+- README beskriver GitHub-basert installasjon og oppdatering uten nye ZIP-filer.
+
 ## 0.6.12 — 2026-07-07
 
 - Fjerner gammel `watch-autosync` polling-kode fra CLI og autosync-modulen.

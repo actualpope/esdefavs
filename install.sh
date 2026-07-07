@@ -33,6 +33,7 @@ install -m 0755 "$SOURCE_DIR/sync-status.sh" "$INSTALL_DIR/sync-status.sh"
 install -m 0755 "$SOURCE_DIR/sync-now.sh" "$INSTALL_DIR/sync-now.sh"
 install -m 0755 "$SOURCE_DIR/esde-closed.sh" "$INSTALL_DIR/esde-closed.sh"
 install -m 0755 "$SOURCE_DIR/update.sh" "$INSTALL_DIR/update.sh"
+printf '%s\n' "$SOURCE_DIR" > "$INSTALL_DIR/source-dir.txt"
 
 cat > "$BIN_DIR/emudeck-favorites-sync" <<'EOF'
 #!/usr/bin/env bash
