@@ -28,10 +28,21 @@ urllib.request.urlretrieve(url, archive)
 with zipfile.ZipFile(archive) as zf:
     zf.extractall(tmpdir)
 PY
-  local extracted="$tmpdir/esdefavs-main"
-  if [[ ! -x "$extracted/install.sh" ]]; then
+  local extracted=""
+  if [[ -f "$tmpdir/esdefavs-main/install.sh" ]]; then
+    extracted="$tmpdir/esdefavs-main"
+  else
+    while IFS= read -r candidate; do
+      extracted="$(dirname "$candidate")"
+      break
+    done < <(find "$tmpdir" -mindepth 2 -maxdepth 3 -type f -name install.sh | sort)
+  fi
+  if [[ ! -f "$extracted/install.sh" ]]; then
     echo "Downloaded ZIP did not contain install.sh where expected:"
-    echo "  $extracted/install.sh"
+    echo "  $tmpdir/esdefavs-main/install.sh"
+    echo
+    echo "Extracted top-level folders were:"
+    find "$tmpdir" -mindepth 1 -maxdepth 1 -type d -print | sort | sed 's/^/  /'
     exit 2
   fi
   echo "Installing downloaded GitHub ZIP..."

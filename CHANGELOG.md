@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.16 — 2026-07-07
+
+- ZIP-basert updater finner nå `install.sh` selv om GitHub pakker ut arkivet med et annet toppmappenavn enn `esdefavs-main`.
+- Hvis ZIP-strukturen likevel er feil, viser updateren hvilke toppmapper den faktisk fant.
+
 ## 0.6.15 — 2026-07-07
 
 - `install.sh` lager nå en snarvei på Steam Deck-skrivebordet: `~/Desktop/EmuDeck Favorites Sync.desktop`.
