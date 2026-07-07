@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=EmuDeck Favorites Sync
+Comment=Skru ES-DE til Steam-favorittsync på og av
+Exec=sh -c 'cd "$(dirname "$1")"; bash "./EmuDeck Favorites Sync.sh"' dummy %k
+Terminal=false
+Categories=Game;Utility;

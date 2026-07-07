@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<gameList>
+  <game>
+    <path>./Demo Game.chd</path>
+    <name>Demo Game</name>
+    <favorite>true</favorite>
+  </game>
+  <game>
+    <path>./Not Favorite.chd</path>
+    <name>Not Favorite</name>
+  </game>
+</gameList>
+

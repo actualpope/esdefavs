@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "emudeck-favorites-sync"
+version = "0.6.11"
+description = "Safe ES-DE favorites scanner and Steam sync planner for EmuDeck"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "EmuDeck Favorites Sync contributors"}]
+dependencies = []
+
+[project.scripts]
+emudeck-favorites-sync = "emudeck_favorites_sync.cli:main"
+
+[tool.setuptools]
+packages = ["emudeck_favorites_sync"]
