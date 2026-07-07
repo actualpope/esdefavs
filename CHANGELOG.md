@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.20 — 2026-07-07
+
+- Varsler nå ved scan hvis en PS2-favoritt er en multi-disc M3U-mappe: PCSX2 støtter ikke `.m3u`-avspillingslister (PCSX2/pcsx2#7640, #6696), så hver disk bør favorittmerkes som egen oppføring i stedet. Varselet blokkerer ikke synkronisering av spillet.
+
 ## 0.6.19 — 2026-07-07
 
 - Multi-disc M3U-favoritter (ES-DEs "directories interpreted as files"-mappe, f.eks. `Game.m3u/` med disker og en `Game.m3u`-fil inni) løses nå til selve m3u-fila inni mappa, ikke til mappa selv.

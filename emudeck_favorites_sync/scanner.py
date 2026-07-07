@@ -13,6 +13,12 @@ from .models import Diagnostic, GameEntry, Manifest, SystemHealth
 
 _XML_DECLARATION_RE = re.compile(r"<\?xml[^?]*\?>", re.IGNORECASE)
 
+# ES-DE systems whose standard EmuDeck emulator does not understand .m3u playlists,
+# so resolving a multi-disc folder to the inner playlist file would still fail to
+# launch. Verified for ps2/PCSX2 (PCSX2/pcsx2#7640, #6696); add further systems here
+# only after the same has been confirmed for their emulator.
+_M3U_UNSUPPORTED_SYSTEMS = {"ps2"}
+
 
 def _is_true(value: str | None) -> bool:
     return (value or "").strip().lower() in {"true", "1", "yes"}
@@ -183,6 +189,13 @@ def scan(config: AppConfig) -> Manifest:
             if resolved.is_dir() and entry_type == "game":
                 entry_type = "folder-game"
                 launch_path = _multi_disc_playlist_file(resolved)
+                if launch_path != resolved and system in _M3U_UNSUPPORTED_SYSTEMS:
+                    diagnostics.append(Diagnostic(
+                        "warning", "MULTI_DISC_PLAYLIST_UNSUPPORTED",
+                        f"{system}'s emulator does not support .m3u playlists; "
+                        "favorite each disc as its own entry instead of a multi-disc folder.",
+                        system, str(launch_path),
+                    ))
             title = (node.findtext("name") or resolved.stem or resolved.name).strip()
             entries.append(GameEntry(
                 id=_logical_id(system, relative),

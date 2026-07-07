@@ -195,6 +195,16 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(entry.entry_type, "folder-game")
         self.assertTrue(entry.resolved_rom_path.replace("\\", "/").endswith("/Game"))
 
+    def test_ps2_m3u_folder_warns_that_emulator_does_not_support_playlists(self) -> None:
+        self.fx.add_system("ps2", gamelist(game("./Game.m3u", "Game")), (
+            "Game.m3u/Game.m3u",
+            "Game.m3u/Game (Disc 1).chd",
+            "Game.m3u/Game (Disc 2).chd",
+        ))
+        result = scan(self.fx.config())
+        self.assertEqual(len(result.entries), 1)
+        self.assertIn("MULTI_DISC_PLAYLIST_UNSUPPORTED", {item.code for item in result.diagnostics})
+
     def test_srm_preview_matches_existing_parser(self) -> None:
         self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
         parser_dir = self.add_srm_gba_parser()
