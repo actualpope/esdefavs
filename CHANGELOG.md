@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.14 — 2026-07-07
+
+- `update.sh` kan nå oppdatere uten `git` ved å laste ned GitHub ZIP fra `main`.
+- README beskriver installasjon fra GitHub ZIP, ikke bare git-klone.
+- Kontrollpanelets `Oppdater programmet fra GitHub` fungerer nå også på Steam Deck-oppsett uten git installert.
+
 ## 0.6.13 — 2026-07-07
 
 - Legger til `Oppdater programmet fra GitHub` i kontrollpanelet.
