@@ -33,6 +33,41 @@ show_file() {
 }
 
 choose() {
+  local title="EmuDeck Favorites Sync"
+  local prompt="Hva vil du gjore?"
+  local version=""
+  version="$("$APP" --version 2>/dev/null | sed 's/^emudeck-favorites-sync //')" || version=""
+  if [[ -n "$version" ]]; then
+    title="EmuDeck Favorites Sync ${version}"
+    prompt="Versjon: ${version}
+
+Hva vil du gjore?"
+  fi
+  if have kdialog; then
+    kdialog --title "$title" --menu "$prompt" \
+      on "Skru pa automatisk sync" \
+      off "Skru av automatisk sync" \
+      status "Status og favoritter" \
+      now "Oppdater Steam na" \
+      update "Oppdater programmet fra GitHub" \
+      choose_srm "Velg SRM AppImage" \
+      import "Importer stagede favoritter til Steam na" \
+      report "Lag feilsokingsrapport" \
+      quit "Lukk"
+    return
+  elif have zenity; then
+    zenity --title="$title" --text="$prompt" --list --column=valg --column=handling --hide-column=1 \
+      on "Skru pa automatisk sync" \
+      off "Skru av automatisk sync" \
+      status "Status og favoritter" \
+      now "Oppdater Steam na" \
+      update "Oppdater programmet fra GitHub" \
+      choose_srm "Velg SRM AppImage" \
+      import "Importer stagede favoritter til Steam na" \
+      report "Lag feilsokingsrapport" \
+      quit "Lukk"
+    return
+  fi
   if have kdialog; then
     kdialog --title "EmuDeck Favorites Sync" --menu "Hva vil du gjøre?" \
       on "Skru på automatisk sync" \

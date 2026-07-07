@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.17 — 2026-07-07
+
+- Kontrollpanelet viser nå installert programversjon i menyvinduet.
+- Dette gjør det lett å bekrefte at oppdatering fra GitHub faktisk har installert ny versjon.
+
 ## 0.6.16 — 2026-07-07
 
 - ZIP-basert updater finner nå `install.sh` selv om GitHub pakker ut arkivet med et annet toppmappenavn enn `esdefavs-main`.
