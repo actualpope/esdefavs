@@ -74,6 +74,16 @@ def _resolve_entry(
     return resolved, relative, None
 
 
+def _multi_disc_playlist_file(directory: Path) -> Path:
+    # ES-DE's "directories interpreted as files" convention: a multi-disc game is a
+    # directory (e.g. "Game.m3u") holding disc images plus a playlist file with the
+    # same name as the directory. Steam ROM Manager does not understand this
+    # convention and mishandles the directory path itself (SteamGridDB/steam-rom-manager#386),
+    # so we resolve straight to the inner playlist file for launch purposes.
+    candidate = directory / directory.name
+    return candidate if candidate.is_file() else directory
+
+
 def scan(config: AppConfig) -> Manifest:
     diagnostics = list(config.diagnostics)
     entries: list[GameEntry] = []
@@ -169,8 +179,10 @@ def scan(config: AppConfig) -> Manifest:
                 ))
                 continue
             entry_type = "folder" if node.tag == "folder" else "game"
+            launch_path = resolved
             if resolved.is_dir() and entry_type == "game":
                 entry_type = "folder-game"
+                launch_path = _multi_disc_playlist_file(resolved)
             title = (node.findtext("name") or resolved.stem or resolved.name).strip()
             entries.append(GameEntry(
                 id=_logical_id(system, relative),
@@ -178,7 +190,7 @@ def scan(config: AppConfig) -> Manifest:
                 title=title,
                 source_path=source_path,
                 relative_rom_path=relative,
-                resolved_rom_path=str(resolved),
+                resolved_rom_path=str(launch_path),
                 entry_type=entry_type,
                 alternative_emulator=(node.findtext("altemulator") or "").strip(),
             ))

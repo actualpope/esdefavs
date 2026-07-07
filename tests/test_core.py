@@ -176,6 +176,25 @@ class ScannerTests(unittest.TestCase):
         )), ("Game.chd",))
         self.assertEqual(scan(self.fx.config()).entries[0].alternative_emulator, "PCSX2 Legacy")
 
+    def test_multi_disc_m3u_folder_resolves_to_inner_playlist_file(self) -> None:
+        self.fx.add_system("psx", gamelist(game("./Game.m3u", "Game")), (
+            "Game.m3u/Game.m3u",
+            "Game.m3u/Game (Disc 1).chd",
+            "Game.m3u/Game (Disc 2).chd",
+        ))
+        entry = scan(self.fx.config()).entries[0]
+        self.assertEqual(entry.entry_type, "folder-game")
+        self.assertTrue(entry.resolved_rom_path.replace("\\", "/").endswith("Game.m3u/Game.m3u"))
+        self.assertEqual(entry.relative_rom_path, "Game.m3u")
+
+    def test_folder_game_without_matching_inner_file_keeps_directory_path(self) -> None:
+        self.fx.add_system("ps3", gamelist(game("./Game", "Game")), (
+            "Game/PS3_GAME/PARAM.SFO",
+        ))
+        entry = scan(self.fx.config()).entries[0]
+        self.assertEqual(entry.entry_type, "folder-game")
+        self.assertTrue(entry.resolved_rom_path.replace("\\", "/").endswith("/Game"))
+
     def test_srm_preview_matches_existing_parser(self) -> None:
         self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
         parser_dir = self.add_srm_gba_parser()

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.19 — 2026-07-07
+
+- Multi-disc M3U-favoritter (ES-DEs "directories interpreted as files"-mappe, f.eks. `Game.m3u/` med disker og en `Game.m3u`-fil inni) løses nå til selve m3u-fila inni mappa, ikke til mappa selv.
+- Dette unngår kjent Steam ROM Manager-begrensning (SteamGridDB/steam-rom-manager#386) der SRM feiltolker en mappe med `.m3u`-navn som selve avspillingslisten og bryter oppstart i emulatoren.
+- Mapper-som-spill uten en tilsvarende fil inni (for eksempel PS3-mapper) er upåvirket og løses fortsatt til selve mappa.
+
 ## 0.6.18 — 2026-07-07
 
 - Legger tilbake samlet Steam collection `ES-DE Favorites` for alle favorittspill.
