@@ -4,6 +4,8 @@ set -euo pipefail
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="${HOME}/.local/share/emudeck-favorites-sync"
 BIN_DIR="${HOME}/.local/bin"
+DESKTOP_DIR="${HOME}/Desktop"
+ICON_PATH="${INSTALL_DIR}/emudeck-favorites-sync.svg"
 
 command -v python3 >/dev/null 2>&1 || {
   echo "Error: Python 3 is required but was not found." >&2
@@ -21,10 +23,11 @@ if command -v systemctl >/dev/null 2>&1; then
   fi
 fi
 
-mkdir -p "$INSTALL_DIR" "$BIN_DIR"
+mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$DESKTOP_DIR"
 rm -rf "$INSTALL_DIR/emudeck_favorites_sync"
 cp -R "$SOURCE_DIR/emudeck_favorites_sync" "$INSTALL_DIR/"
 install -m 0644 "$SOURCE_DIR/pyproject.toml" "$INSTALL_DIR/pyproject.toml"
+install -m 0644 "$SOURCE_DIR/assets/emudeck-favorites-sync.svg" "$ICON_PATH"
 install -m 0755 "$SOURCE_DIR/EmuDeck Favorites Sync.sh" "$INSTALL_DIR/EmuDeck Favorites Sync.sh"
 install -m 0644 "$SOURCE_DIR/EmuDeck Favorites Sync.desktop" "$INSTALL_DIR/EmuDeck Favorites Sync.desktop"
 install -m 0755 "$SOURCE_DIR/sync-on.sh" "$INSTALL_DIR/sync-on.sh"
@@ -49,10 +52,12 @@ Type=Application
 Name=EmuDeck Favorites Sync
 Comment=Skru ES-DE til Steam-favorittsync på og av
 Exec=bash "${INSTALL_DIR}/EmuDeck Favorites Sync.sh"
+Icon=${ICON_PATH}
 Terminal=false
 Categories=Game;Utility;
 EOF
 chmod 0644 "$INSTALL_DIR/EmuDeck Favorites Sync.desktop"
+install -m 0755 "$INSTALL_DIR/EmuDeck Favorites Sync.desktop" "$DESKTOP_DIR/EmuDeck Favorites Sync.desktop"
 
 if [[ "$SERVICE_WAS_ACTIVE" -eq 1 || "$TIMER_WAS_ACTIVE" -eq 1 ]]; then
   systemctl --user disable --now emudeck-favorites-sync.timer >/dev/null 2>&1 || true
@@ -65,6 +70,7 @@ echo "Installed EmuDeck Favorites Sync."
 echo
 echo "Graphical control panel:"
 echo "  ${INSTALL_DIR}/EmuDeck Favorites Sync.desktop"
+echo "  ${DESKTOP_DIR}/EmuDeck Favorites Sync.desktop"
 echo
 echo "Simple autosync commands:"
 echo "  ${BIN_DIR}/emudeck-favorites-sync autosync-on"

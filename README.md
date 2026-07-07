@@ -1,4 +1,4 @@
-# EmuDeck Favorites Sync 0.6.14
+# EmuDeck Favorites Sync 0.6.15
 
 Et lite Steam Deck-program som syncer ES-DE-favoritter til Steam.
 
@@ -40,6 +40,7 @@ Etterpå åpner du kontrollpanelet herfra:
 
 ```text
 ~/.local/share/emudeck-favorites-sync/EmuDeck Favorites Sync.desktop
+~/Desktop/EmuDeck Favorites Sync.desktop
 ```
 
 Du kan også åpne desktop-filen direkte fra mappen over i Dolphin.

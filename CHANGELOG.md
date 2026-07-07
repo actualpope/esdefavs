@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.15 — 2026-07-07
+
+- `install.sh` lager nå en snarvei på Steam Deck-skrivebordet: `~/Desktop/EmuDeck Favorites Sync.desktop`.
+- Legger til et eget ikon for kontrollpanelet og skrivebordssnarveien.
+- Installasjonsmeldingen viser nå både installert kontrollpanel og skrivebordssnarveien.
+
 ## 0.6.14 — 2026-07-07
 
 - `update.sh` kan nå oppdatere uten `git` ved å laste ned GitHub ZIP fra `main`.
