@@ -1,4 +1,4 @@
-# EmuDeck Favorites Sync 0.6.11
+# EmuDeck Favorites Sync 0.6.12
 
 Et lite Steam Deck-program som syncer ES-DE-favoritter til Steam.
 
@@ -24,6 +24,12 @@ Du kan også installere manuelt fra terminal:
 
 ```bash
 bash install.sh
+```
+
+Hvis du har klonet prosjektet fra GitHub, kan du senere oppdatere fra samme mappe:
+
+```bash
+bash update.sh
 ```
 
 Etter installering ligger kontrollpanelet også her:
@@ -108,6 +114,7 @@ Kjør SRM add nå
 ~/.local/bin/emudeck-favorites-sync autosync-status
 ~/.local/bin/emudeck-favorites-sync autosync-off
 ~/.local/bin/emudeck-favorites-sync autosync-now
+~/.local/bin/emudeck-favorites-sync esde-closed
 ~/.local/bin/emudeck-favorites-sync srm-remove-now
 ~/.local/bin/emudeck-favorites-sync srm-add-now
 ~/.local/bin/emudeck-favorites-sync set-srm-path "/path/to/Steam-ROM-Manager.AppImage"

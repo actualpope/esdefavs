@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.12 — 2026-07-07
+
+- Fjerner gammel `watch-autosync` polling-kode fra CLI og autosync-modulen.
+- Skriver nå `applied.json` etter vellykket reconcile, slik at `plan`/`check` kan sammenligne mot sist bekreftet sync.
+- Legger til `update.sh` for enkel `git pull` + reinstall på Steam Deck.
+- Legger til GitHub Actions-testworkflow som kjører unittest-pakken på push og pull request.
+
 ## 0.6.11 — 2026-07-07
 
 - Fjerner timer-/periodisk-sjekk-modellen fra ny autosync-retning.

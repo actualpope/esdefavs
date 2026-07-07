@@ -380,6 +380,10 @@ class ScannerTests(unittest.TestCase):
         manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/gba/favorites.json"
         self.assertTrue(manifest_path.is_file())
         self.assertIsNone(synced["steam_import"])
+        applied = load_manifest(config.state_dir / "applied.json")
+        plan = build_plan(scan(config), applied)
+        self.assertEqual(plan.additions, [])
+        self.assertEqual(plan.removals, [])
 
     def test_autosync_stays_pending_if_srm_add_fails(self) -> None:
         self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))

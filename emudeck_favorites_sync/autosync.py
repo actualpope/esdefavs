@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,7 +18,6 @@ from .steam_shortcuts import manual_entries, remove_stale_shortcuts, steam_libra
 
 
 SERVICE_NAME = "emudeck-favorites-sync.service"
-DEFAULT_INTERVAL_SECONDS = 20
 
 
 def utc_now() -> str:
@@ -361,6 +359,7 @@ def autosync_once(config: AppConfig, *, force: bool = False) -> dict[str, Any]:
             state["last_result"] = "synced-and-srm-added"
             state["last_error"] = ""
             save_last_srm_entries(config, current_srm_entries)
+            save_manifest_atomic(config.state_dir / "applied.json", manifest)
             log_autosync(config, "ran Steam ROM Manager add for ES-DE Favorites Sync parsers")
         else:
             state["last_result"] = "staged-srm-add-blocked"
@@ -385,21 +384,3 @@ def autosync_once(config: AppConfig, *, force: bool = False) -> dict[str, Any]:
         "steam_import": None,
         "state": state,
     }
-
-
-def watch_autosync(config: AppConfig, interval_seconds: int = DEFAULT_INTERVAL_SECONDS) -> int:
-    log_autosync(config, f"watcher started; interval={interval_seconds}s")
-    while True:
-        state = load_autosync_state(config)
-        if not state.get("enabled"):
-            log_autosync(config, "watcher exiting because autosync is disabled")
-            return 0
-        try:
-            autosync_once(config)
-        except Exception as error:  # defensive service loop
-            state = load_autosync_state(config)
-            state["last_result"] = "error"
-            state["last_error"] = str(error)
-            save_autosync_state(config, state)
-            log_autosync(config, f"error: {error}")
-        time.sleep(interval_seconds)

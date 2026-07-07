@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 from . import __version__
-from .autosync import autosync_once, autosync_status, disable_autosync, enable_autosync, esde_closed, watch_autosync
+from .autosync import autosync_once, autosync_status, disable_autosync, enable_autosync, esde_closed
 from .config import AppConfig, discover_config
 from .compatibility import collect_compatibility
 from .models import Diagnostic, Manifest, Plan
@@ -54,8 +54,6 @@ def _parser() -> argparse.ArgumentParser:
     srm_path_parser = subparsers.add_parser("set-srm-path", help="Remember the Steam ROM Manager AppImage path")
     srm_path_parser.add_argument("path", help="Path to Steam-ROM-Manager.AppImage")
     subparsers.add_parser("steam-import-now", help="Import staged favorites into Steam shortcuts now")
-    watch_parser = subparsers.add_parser("watch-autosync", help=argparse.SUPPRESS)
-    watch_parser.add_argument("--interval", type=int, default=20, help=argparse.SUPPRESS)
     subparsers.add_parser("autosync-check", help=argparse.SUPPRESS)
     report_parser = subparsers.add_parser(
         "compatibility-report", help="Create a read-only SteamOS, EmuDeck, SRM and Steam report"
@@ -660,8 +658,6 @@ def main(argv: list[str] | None = None) -> int:
         return _set_srm_path(args)
     if args.command == "steam-import-now":
         return _steam_import_now(args)
-    if args.command == "watch-autosync":
-        return watch_autosync(_config(args), interval_seconds=max(5, args.interval))
     if args.command == "status":
         return _show_status(args)
     if args.command == "compatibility-report":
