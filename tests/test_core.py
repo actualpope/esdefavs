@@ -13,6 +13,7 @@ from emudeck_favorites_sync.autosync import (
     autosync_status,
     esde_closed,
     favorite_signature,
+    reset_favorites_sync,
     save_autosync_state,
     save_last_srm_entries,
 )
@@ -21,11 +22,18 @@ from emudeck_favorites_sync.cli import _print_autosync_summary, main as cli_main
 from emudeck_favorites_sync.models import Diagnostic, GameEntry, Manifest, SystemHealth
 from emudeck_favorites_sync.planner import build_plan
 from emudeck_favorites_sync.scanner import scan
-from emudeck_favorites_sync.srm_apply import stage_apply
+from emudeck_favorites_sync.srm_apply import purge_owned_parsers, stage_apply
 from emudeck_favorites_sync.srm_cli import SrmCliResult, find_srm_appimage, set_srm_app_path
 from emudeck_favorites_sync.state import load_manifest, save_manifest_atomic
 from emudeck_favorites_sync.srm_preview import build_srm_preview
-from emudeck_favorites_sync.steam_shortcuts import import_to_steam, manual_entries, read_shortcuts, remove_stale_shortcuts, write_shortcuts
+from emudeck_favorites_sync.steam_shortcuts import (
+    import_to_steam,
+    manual_entries,
+    read_shortcuts,
+    remove_all_owned_shortcuts,
+    remove_stale_shortcuts,
+    write_shortcuts,
+)
 
 
 def gamelist(*games: str) -> str:
@@ -676,6 +684,115 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(result.removed, 1)
         self.assertEqual(read_shortcuts(steam_config_dir / "shortcuts.vdf"), [])
 
+    def test_stale_cleanup_removes_entry_when_only_emulator_target_changed(self) -> None:
+        self.fx.add_system("switch", gamelist(game("./Game.nsp", "Game")), ("Game.nsp",))
+        self.add_srm_gba_parser()
+        steam_config_dir = self.fx.add_steam_user()
+        previous_entry = {
+            "title": "Game", "target": "/Emulation/tools/launchers/citron.sh",
+            "startIn": "", "launchOptions": '"Game.nsp"', "appendArgsToExecutable": True,
+        }
+        current_entry = {
+            "title": "Game", "target": "/Emulation/tools/launchers/eden.sh",
+            "startIn": "", "launchOptions": '"Game.nsp"', "appendArgsToExecutable": True,
+        }
+        # Same title and launch options (only the emulator/target changed) — simulates a
+        # duplicate left behind in Steam after switching which emulator a system uses.
+        write_shortcuts(steam_config_dir / "shortcuts.vdf", [
+            {
+                "AppName": previous_entry["title"], "Exe": previous_entry["target"],
+                "StartDir": "", "LaunchOptions": previous_entry["launchOptions"],
+                "tags": {"0": "Nintendo Switch"},
+            },
+            {
+                "AppName": current_entry["title"], "Exe": current_entry["target"],
+                "StartDir": "", "LaunchOptions": current_entry["launchOptions"],
+                "tags": {"0": "Nintendo Switch"},
+            },
+        ])
+        config = self.fx.config()
+        result = remove_stale_shortcuts(
+            config, previous_entries=[previous_entry], current_entries=[current_entry], steam_running=False,
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(result.removed, 1)
+        remaining = read_shortcuts(steam_config_dir / "shortcuts.vdf")
+        self.assertEqual([item["Exe"] for item in remaining], [current_entry["target"]])
+
+    def test_purge_owned_parsers_dry_run_previews_without_changing_anything(self) -> None:
+        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
+        parser_dir = self.add_srm_gba_parser()
+        config = self.fx.config()
+        stage_apply(config, scan(config), dry_run=False, steam_running=False)
+
+        preview = purge_owned_parsers(config, dry_run=True)
+        self.assertTrue(preview.ok)
+        self.assertEqual(preview.parsers_found, ["emudeck-favorites-sync:gba"])
+        self.assertEqual(preview.entries_found, 1)
+        configs = json.loads((parser_dir / "userConfigurations.json").read_text(encoding="utf-8"))
+        self.assertTrue(any(item["parserId"] == "emudeck-favorites-sync:gba" for item in configs))
+
+        confirmed = purge_owned_parsers(config, dry_run=False)
+        self.assertTrue(confirmed.ok)
+        configs_after = json.loads((parser_dir / "userConfigurations.json").read_text(encoding="utf-8"))
+        self.assertFalse(any(item["parserId"] == "emudeck-favorites-sync:gba" for item in configs_after))
+        self.assertFalse((parser_dir / "manualManifests/emudeck-favorites-sync").exists())
+
+    def test_remove_all_owned_shortcuts_removes_only_tagged_entries(self) -> None:
+        steam_config_dir = self.fx.add_steam_user()
+        write_shortcuts(steam_config_dir / "shortcuts.vdf", [
+            {"AppName": "Owned Game", "Exe": "/a", "StartDir": "", "LaunchOptions": "",
+             "tags": {"0": "ES-DE Favorites Sync", "1": "ES-DE Favorites"}},
+            {"AppName": "Favorites Tagged", "Exe": "/b", "StartDir": "", "LaunchOptions": "",
+             "tags": {"0": "ES-DE Favorites"}},
+            {"AppName": "Unrelated Game", "Exe": "/c", "StartDir": "", "LaunchOptions": "", "tags": {"0": "RPG"}},
+        ])
+        config = self.fx.config()
+        result = remove_all_owned_shortcuts(config, steam_running=False)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.removed, 2)
+        remaining = read_shortcuts(steam_config_dir / "shortcuts.vdf")
+        self.assertEqual([item["AppName"] for item in remaining], ["Unrelated Game"])
+
+    def test_reset_blocks_when_steam_running(self) -> None:
+        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
+        self.add_srm_gba_parser()
+        config = self.fx.config()
+        stage_apply(config, scan(config), dry_run=False, steam_running=False)
+        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": True}}):
+            result = reset_favorites_sync(config, dry_run=False)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason"], "Steam is running")
+
+    def test_reset_confirm_clears_parsers_shortcuts_and_state(self) -> None:
+        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
+        parser_dir = self.add_srm_gba_parser()
+        steam_config_dir = self.fx.add_steam_user()
+        config = self.fx.config()
+        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": False}}), \
+                patch("emudeck_favorites_sync.autosync.run_srm_remove_owned", return_value=SrmCliResult(ok=True, attempted=True)), \
+                patch("emudeck_favorites_sync.autosync.run_srm_add_owned", return_value=SrmCliResult(ok=True, attempted=True)):
+            synced = autosync_once(config)
+        self.assertTrue(synced["synced"])
+        write_shortcuts(steam_config_dir / "shortcuts.vdf", [
+            {"AppName": "Game", "Exe": "/usr/bin/retroarch", "StartDir": "", "LaunchOptions": "",
+             "tags": {"0": "ES-DE Favorites Sync", "1": "ES-DE Favorites"}},
+        ])
+
+        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": False}}), \
+                patch("emudeck_favorites_sync.autosync.run_srm_remove_owned", return_value=SrmCliResult(ok=True, attempted=True)):
+            result = reset_favorites_sync(config, dry_run=False)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["parsers_found"], ["emudeck-favorites-sync:gba"])
+        self.assertEqual(result["steam_cleanup"]["removed"], 1)
+        configs_after = json.loads((parser_dir / "userConfigurations.json").read_text(encoding="utf-8"))
+        self.assertFalse(any(item["parserId"] == "emudeck-favorites-sync:gba" for item in configs_after))
+        self.assertEqual(read_shortcuts(steam_config_dir / "shortcuts.vdf"), [])
+        status = autosync_status(config)
+        self.assertFalse(status["enabled"])
+        self.assertFalse(status["pending"])
+        self.assertFalse((config.state_dir / "desired.json").exists())
+
     def test_srm_appimage_can_be_set_manually(self) -> None:
         app = self.fx.home / "weird/place/Steam ROM Manager 2.AppImage"
         app.parent.mkdir(parents=True)
@@ -841,6 +958,11 @@ class CliTests(unittest.TestCase):
     def test_list_favorites_is_registered(self) -> None:
         with self.assertRaises(SystemExit) as raised:
             cli_main(["list-favorites", "--help"])
+        self.assertEqual(raised.exception.code, 0)
+
+    def test_reset_is_registered(self) -> None:
+        with self.assertRaises(SystemExit) as raised:
+            cli_main(["reset", "--help"])
         self.assertEqual(raised.exception.code, 0)
 
     def test_autosync_now_summary_flag_is_registered(self) -> None:

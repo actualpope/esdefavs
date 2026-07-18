@@ -13,6 +13,7 @@ from typing import Any
 from .config import AppConfig
 from .models import Diagnostic, Manifest
 from .srm_preview import _find_parser_candidates
+from .steam_shortcuts import manual_entries
 
 
 OWNED_PARSER_PREFIX = "emudeck-favorites-sync:"
@@ -376,4 +377,67 @@ def stage_apply(
     )
     _write_json_atomic(parser_file, [*remaining, *owned])
     result.written = True
+    return result
+
+
+@dataclass
+class PurgeResult:
+    ok: bool
+    dry_run: bool
+    parsers_found: list[str] = field(default_factory=list)
+    entries_found: int = 0
+    backups: list[str] = field(default_factory=list)
+    diagnostics: list[Diagnostic] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "dry_run": self.dry_run,
+            "parsers_found": self.parsers_found,
+            "entries_found": self.entries_found,
+            "backups": self.backups,
+            "diagnostics": [item.to_dict() for item in self.diagnostics],
+        }
+
+
+def purge_owned_parsers(config: AppConfig, *, dry_run: bool) -> PurgeResult:
+    srm_user_data = config.home / ".config/steam-rom-manager/userData"
+    parser_file = srm_user_data / "userConfigurations.json"
+    manual_root = srm_user_data / "manualManifests/emudeck-favorites-sync"
+    result = PurgeResult(ok=False, dry_run=dry_run, entries_found=len(manual_entries(config)))
+
+    if not parser_file.is_file():
+        result.ok = True
+        return result
+    try:
+        parsers = _read_json(parser_file)
+    except (OSError, ValueError, TypeError) as error:
+        result.diagnostics.append(Diagnostic("error", "SRM_READ_FAILED", str(error)))
+        return result
+    if not isinstance(parsers, list):
+        result.diagnostics.append(Diagnostic("error", "SRM_SCHEMA_UNEXPECTED", "SRM parser config was not a list."))
+        return result
+
+    owned = [
+        item for item in parsers
+        if isinstance(item, dict) and str(item.get("parserId", "")).startswith(OWNED_PARSER_PREFIX)
+    ]
+    result.parsers_found = [str(item.get("parserId")) for item in owned]
+    result.ok = True
+    if dry_run or not owned:
+        return result
+
+    backup_dir = config.state_dir / "backups" / _timestamp()
+    for path in (parser_file, manual_root):
+        backup_path = _backup(path, backup_dir)
+        if backup_path:
+            result.backups.append(backup_path)
+
+    remaining = [
+        item for item in parsers
+        if not (isinstance(item, dict) and str(item.get("parserId", "")).startswith(OWNED_PARSER_PREFIX))
+    ]
+    _write_json_atomic(parser_file, remaining)
+    if manual_root.exists():
+        shutil.rmtree(manual_root)
     return result

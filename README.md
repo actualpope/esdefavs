@@ -1,4 +1,4 @@
-# EmuDeck Favorites Sync 0.7.1
+# EmuDeck Favorites Sync 0.7.2
 
 Et lite Steam Deck-program som syncer ES-DE-favoritter til Steam.
 
@@ -79,11 +79,12 @@ Etter installering ligger kontrollpanelet også her:
 
 Åpne `EmuDeck Favorites Sync.desktop`.
 
-Der får du en enkel meny med bare tre valg:
+Der får du en enkel meny:
 
 - **Oppdater ES-DE favoritter** — leser gjeldende favoritter fra ES-DE og synkroniserer dem til Steam via SRM, hvis Steam er lukket.
 - **Se ES-DE Favoritter** — viser en ren liste over hvilke spill som er favorittmerket akkurat nå. Endrer ingenting.
 - **Oppdater program** — henter siste versjon fra GitHub.
+- **Reset (fjern alt fra Steam/SRM)** — viser først nøyaktig hva som vil bli fjernet, ber om bekreftelse, og fjerner deretter alle `ES-DE Favorites Sync`-parsere, manifester og Steam-snarveier programmet har laget. Rører ikke ES-DE sine egne favoritter eller andre SRM-parsere.
 
 Vanlig bruk er bare:
 
@@ -148,6 +149,8 @@ De to vanligste, som tilsvarer de to første knappene i kontrollpanelet:
 ~/.local/bin/emudeck-favorites-sync srm-add-now
 ~/.local/bin/emudeck-favorites-sync set-srm-path "/path/to/Steam-ROM-Manager.AppImage"
 ~/.local/bin/emudeck-favorites-sync steam-import-now
+~/.local/bin/emudeck-favorites-sync reset            # forhåndsvisning, endrer ingenting
+~/.local/bin/emudeck-favorites-sync reset --confirm  # fjerner faktisk
 ```
 
 Programmet installeres uten bakgrunnstjeneste. `autosync-on`/`autosync-off` finnes fortsatt i CLI-en for den som selv vil eksperimentere med en bakgrunnstjeneste som oppdager endringer og kjører `esde-closed` automatisk, men dette er ikke standardoppsettet og vises ikke i kontrollpanelet.

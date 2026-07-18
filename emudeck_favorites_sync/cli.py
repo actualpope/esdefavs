@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 from . import __version__
-from .autosync import autosync_once, autosync_status, disable_autosync, enable_autosync, esde_closed
+from .autosync import autosync_once, autosync_status, disable_autosync, enable_autosync, esde_closed, reset_favorites_sync
 from .config import AppConfig, discover_config
 from .compatibility import collect_compatibility
 from .models import Diagnostic, Manifest, Plan
@@ -66,6 +66,10 @@ def _parser() -> argparse.ArgumentParser:
     apply_parser = subparsers.add_parser("apply", help="Stage safe SRM Manual parsers/manifests")
     apply_parser.add_argument("--dry-run", action="store_true", help="Validate and show what would be written")
     apply_parser.add_argument("--confirm", action="store_true", help="Write SRM staging files after safety checks")
+    reset_parser = subparsers.add_parser(
+        "reset", help="Remove every ES-DE Favorites Sync entry from SRM and Steam (does not touch ES-DE favorites)"
+    )
+    reset_parser.add_argument("--confirm", action="store_true", help="Actually remove; without this, only preview")
     return parser
 
 
@@ -622,6 +626,33 @@ def _steam_import_now(args: argparse.Namespace) -> int:
     return 0 if result.ok else 2
 
 
+def _reset(args: argparse.Namespace) -> int:
+    config = _config(args)
+    result = reset_favorites_sync(config, dry_run=not args.confirm)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        _print_header()
+        if result.get("steam_running"):
+            print("Steam kjører. Lukk Steam helt og prøv igjen.")
+        elif result["dry_run"]:
+            print(f"Dette VILLE fjernet {len(result['parsers_found'])} SRM-parser(e) og alle Steam-oppføringer laget av dem.")
+            print(f"Nåværende favorittoppføringer i manifestet: {result['manifest_entries_found']}")
+            if result["parsers_found"]:
+                print("\nParsere som ville blitt fjernet:")
+                for parser_id in result["parsers_found"]:
+                    print(f"  {parser_id}")
+            print("\nES-DE sine egne favoritter røres ikke. Ingenting er endret ennå.")
+            print("Kjør 'reset --confirm' for å faktisk fjerne dette.")
+        else:
+            print(f"Fjernet {len(result['parsers_found'])} SRM-parser(e).")
+            steam_cleanup = result.get("steam_cleanup") or {}
+            print(f"Fjernet {steam_cleanup.get('removed', 0)} Steam-snarvei(er).")
+            print("Autosync-status og lagret tilstand er nullstilt.")
+            print("ES-DE sine egne favoritter er ikke endret.")
+    return 0 if result.get("ok") or result.get("dry_run") else 2
+
+
 def _show_status(args: argparse.Namespace) -> int:
     config = _config(args)
     desired = _load_or_error(config.state_dir / "desired.json")
@@ -713,6 +744,8 @@ def main(argv: list[str] | None = None) -> int:
         return _compatibility_report(args)
     if args.command == "apply":
         return _apply(args)
+    if args.command == "reset":
+        return _reset(args)
     return 2
 
 

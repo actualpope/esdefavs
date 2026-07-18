@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.2 — 2026-07-07
+
+- Fikser en reell duplikat-bug: hvis kun emulatoren/kjørbar fil for et favorittspill endret seg mellom to synkroniseringer (for eksempel etter å ha byttet fra én emulator til en annen for samme system), ble ikke den gamle Steam-oppføringen lenger gjenkjent som utdatert, og ble derfor liggende igjen som en duplikat ved siden av den nye. Opprydding krever nå at selve den kjørbare filen også stemmer, ikke bare tittel og argumenter.
+- Ny kommando/knapp **Reset**: fjerner alle `ES-DE Favorites Sync`-parsere, manifester og Steam-snarveier programmet har laget, uansett hvilken tilstand de er i. Viser alltid en forhåndsvisning først og krever eksplisitt bekreftelse (`--confirm` i terminal, bekreftelsesdialog i kontrollpanelet). Rører ikke ES-DE sine egne favoritter eller andre parsere.
+
 ## 0.7.1 — 2026-07-07
 
 - Varsler nå når flere SRM-parsere er like gode kandidater for samme system (for eksempel to Nintendo Switch-parsere, én for et gammelt emulatorvalg og én for et nytt). Tidligere valgte programmet stille én av dem uten å vise at det var tvetydig; nå navngis alle konkurrerende parsere i en advarsel, og du får beskjed om å deaktivere den du ikke vil bruke i Steam ROM Manager.

@@ -259,14 +259,17 @@ def _entry_matches_shortcut(entry: dict[str, Any], shortcut: dict[str, Any]) -> 
     if not title or title != app_name:
         return False
 
-    expected_launch = _normalize_match_text(entry.get("launchOptions"))
-    actual_launch = _normalize_match_text(shortcut.get("LaunchOptions"))
-    if expected_launch and actual_launch and (expected_launch in actual_launch or actual_launch in expected_launch):
-        return True
-
+    # Title/launch-options alone are not enough: a different emulator (a changed
+    # Exe/target) is a different game as far as removal is concerned, even if the
+    # ROM path in launchOptions still reads the same.
     expected_target = _normalize_match_text(entry.get("target"))
     actual_exe = _normalize_match_text(shortcut.get("Exe"))
-    return bool(expected_target and actual_exe and expected_target == actual_exe and expected_launch == actual_launch)
+    if not expected_target or not actual_exe or expected_target != actual_exe:
+        return False
+
+    expected_launch = _normalize_match_text(entry.get("launchOptions"))
+    actual_launch = _normalize_match_text(shortcut.get("LaunchOptions"))
+    return bool(expected_launch and actual_launch and (expected_launch in actual_launch or actual_launch in expected_launch))
 
 
 def _entry_matches_entry(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -274,6 +277,7 @@ def _entry_matches_entry(left: dict[str, Any], right: dict[str, Any]) -> bool:
         return True
     return (
         _normalize_match_text(left.get("title")) == _normalize_match_text(right.get("title"))
+        and _normalize_match_text(left.get("target")) == _normalize_match_text(right.get("target"))
         and _normalize_match_text(left.get("launchOptions")) == _normalize_match_text(right.get("launchOptions"))
     )
 
@@ -426,6 +430,46 @@ def remove_stale_shortcuts(
             shortcut for shortcut in existing
             if not any(_entry_matches_shortcut(entry, shortcut) for entry in stale_entries)
         ]
+        removed_here = len(existing) - len(kept)
+        if removed_here == 0:
+            continue
+        backup = _backup(shortcuts_file, backup_dir / config_dir.parent.name)
+        if backup:
+            result.backups.append(backup)
+        try:
+            write_shortcuts(shortcuts_file, kept)
+        except OSError as error:
+            result.diagnostics.append(Diagnostic("error", "SHORTCUTS_WRITE_FAILED", str(error), path=str(shortcuts_file)))
+            continue
+        result.shortcuts_files.append(str(shortcuts_file))
+        result.users_written += 1
+        result.removed += removed_here
+
+    result.ok = not any(item.severity == "error" for item in result.diagnostics)
+    return result
+
+
+def remove_all_owned_shortcuts(config: AppConfig, *, steam_running: bool | None) -> SteamCleanupResult:
+    result = SteamCleanupResult(ok=False)
+    if steam_running is True:
+        result.diagnostics.append(Diagnostic("error", "STEAM_RUNNING", "Close Steam completely before reset."))
+        return result
+
+    user_dirs = _steam_user_config_dirs(config)
+    result.users_seen = len(user_dirs)
+    if not user_dirs:
+        result.ok = True
+        return result
+
+    backup_dir = config.state_dir / "backups" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") / "steam-reset"
+    for config_dir in user_dirs:
+        shortcuts_file = config_dir / "shortcuts.vdf"
+        try:
+            existing = read_shortcuts(shortcuts_file)
+        except (OSError, ValueError) as error:
+            result.diagnostics.append(Diagnostic("error", "SHORTCUTS_READ_FAILED", str(error), path=str(shortcuts_file)))
+            continue
+        kept = [shortcut for shortcut in existing if not (_owned(shortcut) or FAVORITES_TAG in _tags(shortcut))]
         removed_here = len(existing) - len(kept)
         if removed_here == 0:
             continue

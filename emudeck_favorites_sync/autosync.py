@@ -11,10 +11,10 @@ from .compatibility import collect_compatibility
 from .config import AppConfig
 from .models import Manifest
 from .scanner import scan
-from .srm_apply import stage_apply
+from .srm_apply import purge_owned_parsers, stage_apply
 from .srm_cli import run_srm_add_owned, run_srm_remove_owned
 from .state import save_manifest_atomic
-from .steam_shortcuts import manual_entries, remove_stale_shortcuts, steam_library_status
+from .steam_shortcuts import manual_entries, remove_all_owned_shortcuts, remove_stale_shortcuts, steam_library_status
 
 
 SERVICE_NAME = "emudeck-favorites-sync.service"
@@ -383,4 +383,58 @@ def autosync_once(config: AppConfig, *, force: bool = False) -> dict[str, Any]:
         "srm_add": srm_add.to_dict() if srm_add else None,
         "steam_import": None,
         "state": state,
+    }
+
+
+def reset_favorites_sync(config: AppConfig, *, dry_run: bool) -> dict[str, Any]:
+    report = collect_compatibility(config)
+    steam_running = report["steam"]["running"] is True
+    entries_found = len(manual_entries(config))
+    preview = purge_owned_parsers(config, dry_run=True)
+
+    if dry_run:
+        return {
+            "dry_run": True,
+            "ok": preview.ok,
+            "steam_running": steam_running,
+            "parsers_found": preview.parsers_found,
+            "manifest_entries_found": entries_found,
+        }
+
+    if steam_running:
+        return {
+            "dry_run": False,
+            "ok": False,
+            "steam_running": True,
+            "reason": "Steam is running",
+            "parsers_found": preview.parsers_found,
+            "manifest_entries_found": entries_found,
+        }
+
+    srm_remove = run_srm_remove_owned(config, steam_running=False)
+    steam_cleanup = remove_all_owned_shortcuts(config, steam_running=False)
+    purge = purge_owned_parsers(config, dry_run=False)
+
+    save_autosync_state(config, load_autosync_state_defaults())
+    save_last_srm_entries(config, [])
+    for name in ("desired.json", "applied.json"):
+        path = config.state_dir / name
+        if path.is_file():
+            path.unlink()
+
+    log_autosync(
+        config,
+        f"reset: removed {len(purge.parsers_found)} owned SRM parser(s), "
+        f"{steam_cleanup.removed} Steam shortcut(s)",
+    )
+
+    return {
+        "dry_run": False,
+        "ok": purge.ok and steam_cleanup.ok,
+        "steam_running": False,
+        "parsers_found": purge.parsers_found,
+        "manifest_entries_found": entries_found,
+        "srm_remove": srm_remove.to_dict(),
+        "steam_cleanup": steam_cleanup.to_dict(),
+        "purge": purge.to_dict(),
     }

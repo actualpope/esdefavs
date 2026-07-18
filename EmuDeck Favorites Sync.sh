@@ -48,12 +48,14 @@ Hva vil du gjøre?"
       now "Oppdater ES-DE favoritter" \
       list "Se ES-DE Favoritter" \
       update "Oppdater program" \
+      reset "Reset (fjern alt fra Steam/SRM)" \
       quit "Lukk"
   elif have zenity; then
     zenity --title="$title" --text="$prompt" --list --column=valg --column=handling --hide-column=1 \
       now "Oppdater ES-DE favoritter" \
       list "Se ES-DE Favoritter" \
       update "Oppdater program" \
+      reset "Reset (fjern alt fra Steam/SRM)" \
       quit "Lukk"
   else
     echo "GUI-verktøy mangler. Installer kdialog/zenity eller bruk terminalkommandoene."
@@ -107,6 +109,24 @@ while true; do
       ;;
     update)
       run_and_show "Oppdater program" bash "$HERE/update.sh"
+      ;;
+    reset)
+      preview="$("$APP" reset 2>&1)" || true
+      confirmed=1
+      if have kdialog; then
+        kdialog --title "Reset" --yesno "${preview}
+
+Er du sikker på at du vil fjerne ALT dette fra Steam og Steam ROM Manager? ES-DE sine egne favoritter blir ikke rørt." || confirmed=0
+      elif have zenity; then
+        zenity --title="Reset" --question --width=500 --text="${preview}
+
+Er du sikker på at du vil fjerne ALT dette fra Steam og Steam ROM Manager? ES-DE sine egne favoritter blir ikke rørt." || confirmed=0
+      else
+        confirmed=0
+      fi
+      if [[ "$confirmed" -eq 1 ]]; then
+        run_and_show "Reset" "$APP" reset --confirm
+      fi
       ;;
     quit|"")
       exit 0
