@@ -25,7 +25,7 @@ from emudeck_favorites_sync.scanner import scan
 from emudeck_favorites_sync.srm_apply import describe_parser_matches, purge_owned_parsers, stage_apply
 from emudeck_favorites_sync.srm_cli import SrmCliResult, find_srm_appimage, set_srm_app_path
 from emudeck_favorites_sync.state import load_manifest, save_manifest_atomic
-from emudeck_favorites_sync.srm_preview import build_srm_preview
+from emudeck_favorites_sync.srm_preview import build_srm_preview, load_parser_preferences, save_parser_preference
 from emudeck_favorites_sync.steam_shortcuts import (
     import_to_steam,
     manual_entries,
@@ -366,6 +366,73 @@ class ScannerTests(unittest.TestCase):
         manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/switch/favorites.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(manifest[0]["target"], "/Emulation/tools/launchers/citron.sh")
+
+    def test_parser_preference_resolves_ambiguous_parsers_without_warning(self) -> None:
+        parser_dir = self.fx.home / ".config/steam-rom-manager/userData"
+        parser_dir.mkdir(parents=True, exist_ok=True)
+
+        def make_parser(parser_id: str, config_title: str, executable_path: str) -> dict:
+            return {
+                "configTitle": config_title,
+                "parserType": "Glob",
+                "parserId": parser_id,
+                "disabled": False,
+                "steamDirectory": "${steamdirglobal}",
+                "romDirectory": "${romsdirglobal}/switch",
+                "steamCategories": ["Nintendo Switch"],
+                "imageProviders": ["sgdb"],
+                "onlineImageQueries": ["${fuzzyTitle}"],
+                "userAccounts": {"specifiedAccounts": ["Global"]},
+                "controllers": {},
+                "executable": {"path": executable_path, "appendArgsToExecutable": True},
+                "executableArgs": '"${filePath}"',
+                "startInDirectory": "",
+                "parserInputs": {"glob": "{switch/**,switch}/${title}.nsp"},
+            }
+
+        self.fx.add_system("switch", gamelist(game("./Game.nsp", "Game")), ("Game.nsp",))
+        (parser_dir / "userConfigurations.json").write_text(json.dumps([
+            make_parser("source-switch-citron", "Nintendo Switch - Citron", "/Emulation/tools/launchers/citron.sh"),
+            make_parser("source-switch-eden", "Nintendo Switch - Eden", "/Emulation/tools/launchers/eden.sh"),
+            make_parser("source-switch-ryujinx", "Nintendo Switch - Ryujinx", "/Emulation/tools/launchers/ryujinx.sh"),
+        ]), encoding="utf-8")
+        (parser_dir / "userSettings.json").write_text(json.dumps({
+            "previewSettings": {"deleteDisabledShortcuts": False},
+            "environmentVariables": {
+                "steamDirectory": str(self.fx.home / ".steam/steam"),
+                "romsDirectory": str(self.fx.roms),
+            },
+        }), encoding="utf-8")
+
+        config = self.fx.config()
+        save_parser_preference(config, "switch", "Eden")
+
+        result = stage_apply(config, scan(config), dry_run=False, steam_running=False)
+        self.assertTrue(result.ok)
+        self.assertEqual([item.code for item in result.diagnostics if item.code == "AMBIGUOUS_SRM_PARSER"], [])
+        manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/switch/favorites.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest[0]["target"], "/Emulation/tools/launchers/eden.sh")
+
+        not_found = save_parser_preference(config, "switch", "Snes9x")
+        self.assertEqual(not_found["switch"], "Snes9x")
+        result2 = stage_apply(config, scan(config), dry_run=False, steam_running=False)
+        preference_not_found = [item for item in result2.diagnostics if item.code == "PARSER_PREFERENCE_NOT_FOUND"]
+        self.assertEqual(len(preference_not_found), 1)
+        self.assertIn("Snes9x", preference_not_found[0].message)
+
+        cleared = save_parser_preference(config, "switch", "")
+        self.assertEqual(cleared, {})
+        self.assertEqual(load_parser_preferences(config), {})
+        result3 = stage_apply(config, scan(config), dry_run=False, steam_running=False)
+        self.assertEqual(len([item for item in result3.diagnostics if item.code == "AMBIGUOUS_SRM_PARSER"]), 1)
+
+        save_parser_preference(config, "switch", "Eden")
+        matches = describe_parser_matches(config, scan(config))
+        switch_match = next(item for item in matches if item["system"] == "switch")
+        self.assertEqual(switch_match["matched_parser"], "Nintendo Switch - Eden")
+        self.assertEqual(switch_match["competing_parsers"], [])
+        self.assertEqual(switch_match["preference"], "Eden")
 
     def test_apply_warns_when_srm_variable_does_not_resolve(self) -> None:
         self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
@@ -1010,6 +1077,11 @@ class CliTests(unittest.TestCase):
     def test_reset_is_registered(self) -> None:
         with self.assertRaises(SystemExit) as raised:
             cli_main(["reset", "--help"])
+        self.assertEqual(raised.exception.code, 0)
+
+    def test_set_parser_preference_is_registered(self) -> None:
+        with self.assertRaises(SystemExit) as raised:
+            cli_main(["set-parser-preference", "--help"])
         self.assertEqual(raised.exception.code, 0)
 
     def test_autosync_now_summary_flag_is_registered(self) -> None:

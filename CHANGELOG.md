@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.4 — 2026-07-18
+
+- Ny kommando `set-parser-preference <system> <navn>` som lar deg tvinge frem hvilken SRM-parser som skal brukes for et system når flere konkurrerer likt (for eksempel flere Switch-emulatorer). Bekreftet i praksis: uten dette valgte programmet alltid den samme (feil) parseren igjen, selv etter Reset, siden konflikten ligger i EmuDeck/SRM sine egne parsere og ikke i noe Reset eier.
+- `Oppdater ES-DE favoritter` og "Feilsøking" respekterer nå preferansen: ingen "flere parsere konkurrerer"-advarsel når en preferanse løser den, og et eget varsel (`PARSER_PREFERENCE_NOT_FOUND`) hvis preferansen ikke treffer noen parser.
+
 ## 0.7.3 — 2026-07-07
 
 - Ny knapp **Feilsøking** i kontrollpanelet, som kjører den eksisterende `compatibility-report` og viser resultatet direkte i et vindu i stedet for bare å lagre en JSON-fil.

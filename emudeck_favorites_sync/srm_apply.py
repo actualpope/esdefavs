@@ -12,7 +12,7 @@ from typing import Any
 
 from .config import AppConfig
 from .models import Diagnostic, Manifest
-from .srm_preview import _find_parser_candidates
+from .srm_preview import _find_parser_candidates, load_parser_preferences, select_parser_candidate
 from .steam_shortcuts import manual_entries
 
 
@@ -293,6 +293,7 @@ def stage_apply(
 
     environment = _settings_environment(settings)
     raw_parsers = [item for item in parsers if isinstance(item, dict)]
+    preferences = load_parser_preferences(config)
     grouped_entries: dict[str, list[dict[str, Any]]] = {}
     grouped_parsers: dict[str, dict[str, Any]] = {}
     ambiguous_systems_warned: set[str] = set()
@@ -306,8 +307,19 @@ def stage_apply(
                 entry.resolved_rom_path,
             ))
             continue
-        source = candidates[0][0]
-        if len(candidates) > 1 and candidates[0][1] == candidates[1][1] and entry.system not in ambiguous_systems_warned:
+        preference = preferences.get(entry.system)
+        source = select_parser_candidate(candidates, preference)
+        if preference and preference.casefold() not in str(source.get("configTitle", "")).casefold():
+            result.diagnostics.append(Diagnostic(
+                "warning", "PARSER_PREFERENCE_NOT_FOUND",
+                f"No SRM parser for {entry.system} matched the configured preference {preference!r}; "
+                f"used '{source.get('configTitle')}' instead.",
+                entry.system,
+            ))
+        elif (
+            not preference and len(candidates) > 1 and candidates[0][1] == candidates[1][1]
+            and entry.system not in ambiguous_systems_warned
+        ):
             ambiguous_systems_warned.add(entry.system)
             competing = ", ".join(
                 f"'{item.get('configTitle') or item.get('parserId') or '?'}'" for item, score in candidates
@@ -317,7 +329,8 @@ def stage_apply(
                 "warning", "AMBIGUOUS_SRM_PARSER",
                 f"Multiple SRM parsers match {entry.system} equally well ({competing}); "
                 f"used '{source.get('configTitle')}'. If this is the wrong emulator, disable the unwanted "
-                "parser(s) in Steam ROM Manager and run 'Oppdater ES-DE favoritter' again.",
+                "parser(s) in Steam ROM Manager, or set a preference with 'set-parser-preference "
+                f"{entry.system} <name>'.",
                 entry.system,
             ))
         manual_entry = _manual_entry(entry, source, environment)
@@ -464,6 +477,7 @@ def describe_parser_matches(config: AppConfig, manifest: Manifest) -> list[dict[
     if isinstance(settings, dict):
         environment = _settings_environment(settings)
 
+    preferences = load_parser_preferences(config)
     seen_systems: set[str] = set()
     for entry in manifest.entries:
         if entry.system in seen_systems:
@@ -474,15 +488,17 @@ def describe_parser_matches(config: AppConfig, manifest: Manifest) -> list[dict[
             results.append({
                 "system": entry.system, "example_title": entry.title,
                 "matched_parser": None, "resolved_target": None, "resolved_launch_options": None,
-                "unresolved_target": False, "competing_parsers": [],
+                "unresolved_target": False, "competing_parsers": [], "preference": preferences.get(entry.system),
             })
             continue
-        source = candidates[0][0]
+        preference = preferences.get(entry.system)
+        source = select_parser_candidate(candidates, preference)
+        preference_applied = bool(preference and preference.casefold() in str(source.get("configTitle", "")).casefold())
         manual_entry = _manual_entry(entry, source, environment)
         source_target = str((source.get("executable") or {}).get("path") or "")
         competing = (
             [str(item.get("configTitle") or item.get("parserId")) for item, score in candidates if score == candidates[0][1]]
-            if len(candidates) > 1 and candidates[0][1] == candidates[1][1] else []
+            if not preference_applied and len(candidates) > 1 and candidates[0][1] == candidates[1][1] else []
         )
         results.append({
             "system": entry.system,
@@ -493,5 +509,6 @@ def describe_parser_matches(config: AppConfig, manifest: Manifest) -> list[dict[
             "resolved_launch_options": manual_entry["launchOptions"],
             "unresolved_target": bool(source_target.strip() and not manual_entry["target"].strip()),
             "competing_parsers": competing,
+            "preference": preference,
         })
     return results

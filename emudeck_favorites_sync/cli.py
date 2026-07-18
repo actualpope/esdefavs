@@ -17,7 +17,7 @@ from .scanner import scan
 from .state import load_manifest, save_manifest_atomic
 from .srm_apply import describe_parser_matches, stage_apply
 from .srm_cli import run_srm_add_owned, run_srm_remove_owned, set_srm_app_path
-from .srm_preview import build_srm_preview
+from .srm_preview import build_srm_preview, save_parser_preference
 from .steam_shortcuts import import_to_steam
 
 
@@ -57,6 +57,15 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser("srm-remove-now", help="Run Steam ROM Manager remove for the ES-DE Favorites Sync parsers now")
     srm_path_parser = subparsers.add_parser("set-srm-path", help="Remember the Steam ROM Manager AppImage path")
     srm_path_parser.add_argument("path", help="Path to Steam-ROM-Manager.AppImage")
+    preference_parser = subparsers.add_parser(
+        "set-parser-preference",
+        help="Always prefer the SRM parser whose title contains this text for a given ES-DE system",
+    )
+    preference_parser.add_argument("system", help="ES-DE system short name, e.g. switch")
+    preference_parser.add_argument(
+        "preference", nargs="?", default="",
+        help="Text to match in the parser's Steam ROM Manager title, e.g. Eden. Omit to clear the preference.",
+    )
     subparsers.add_parser("steam-import-now", help="Import staged favorites into Steam shortcuts now")
     subparsers.add_parser("autosync-check", help=argparse.SUPPRESS)
     report_parser = subparsers.add_parser(
@@ -601,6 +610,21 @@ def _set_srm_path(args: argparse.Namespace) -> int:
     return 0
 
 
+def _set_parser_preference(args: argparse.Namespace) -> int:
+    config = _config(args)
+    preferences = save_parser_preference(config, args.system, args.preference)
+    if args.json:
+        print(json.dumps({"preferences": preferences}, ensure_ascii=False, indent=2))
+    else:
+        _print_header()
+        if args.preference:
+            print(f"Fra nå av brukes SRM-parseren for '{args.system}' som inneholder '{args.preference}' i navnet.")
+        else:
+            print(f"Preferanse for '{args.system}' er fjernet.")
+        print("\nKjør 'Oppdater ES-DE favoritter' for å ta det i bruk.")
+    return 0
+
+
 def _steam_import_now(args: argparse.Namespace) -> int:
     config = _config(args)
     report = collect_compatibility(config)
@@ -711,6 +735,8 @@ def _compatibility_report(args: argparse.Namespace) -> int:
                 problem = "  <-- KJØRBAR FIL LØSER TIL TOMT, VIL IKKE STARTE"
             print(f"  {item['system']:10} {item['example_title']:20} -> {item['matched_parser']}{problem}")
             print(f"               target: {item['resolved_target'] or '(tomt)'}")
+            if item.get("preference"):
+                print(f"               preferanse satt: '{item['preference']}'")
             if item["competing_parsers"]:
                 print(f"               ADVARSEL: like god match mot: {', '.join(item['competing_parsers'])}")
         print(f"\nRapport lagret: {output}")
@@ -752,6 +778,8 @@ def main(argv: list[str] | None = None) -> int:
         return _srm_remove_now(args)
     if args.command == "set-srm-path":
         return _set_srm_path(args)
+    if args.command == "set-parser-preference":
+        return _set_parser_preference(args)
     if args.command == "steam-import-now":
         return _steam_import_now(args)
     if args.command == "status":

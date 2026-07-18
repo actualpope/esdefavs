@@ -1,4 +1,4 @@
-# EmuDeck Favorites Sync 0.7.3
+# EmuDeck Favorites Sync 0.7.4
 
 Et lite Steam Deck-program som syncer ES-DE-favoritter til Steam.
 
@@ -152,7 +152,11 @@ De to vanligste, som tilsvarer de to første knappene i kontrollpanelet:
 ~/.local/bin/emudeck-favorites-sync steam-import-now
 ~/.local/bin/emudeck-favorites-sync reset            # forhåndsvisning, endrer ingenting
 ~/.local/bin/emudeck-favorites-sync reset --confirm  # fjerner faktisk
+~/.local/bin/emudeck-favorites-sync set-parser-preference switch Eden  # tvungent valg når flere parsere konkurrerer
+~/.local/bin/emudeck-favorites-sync set-parser-preference switch       # fjerner preferansen igjen
 ```
+
+Hvis "Feilsøking" viser at flere SRM-parsere konkurrerer om samme system (for eksempel flere emulatorer for Switch), kan du bruke `set-parser-preference` til å alltid velge den du vil ha, i stedet for å måtte fjerne de andre parserne i Steam ROM Manager selv.
 
 Programmet installeres uten bakgrunnstjeneste. `autosync-on`/`autosync-off` finnes fortsatt i CLI-en for den som selv vil eksperimentere med en bakgrunnstjeneste som oppdager endringer og kjører `esde-closed` automatisk, men dette er ikke standardoppsettet og vises ikke i kontrollpanelet.
 

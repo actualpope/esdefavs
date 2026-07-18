@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -125,11 +126,54 @@ def _find_parser_candidates(
     return qualifying
 
 
-def _find_parser(parsers: list[dict[str, Any]], entry: GameEntry, config: AppConfig) -> dict[str, Any] | None:
-    candidates = _find_parser_candidates(parsers, entry, config)
+def parser_preferences_path(config: AppConfig) -> Path:
+    return config.state_dir / "parser-preferences.json"
+
+
+def load_parser_preferences(config: AppConfig) -> dict[str, str]:
+    path = parser_preferences_path(config)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(key): str(value) for key, value in data.items()} if isinstance(data, dict) else {}
+
+
+def save_parser_preference(config: AppConfig, system: str, preference: str) -> dict[str, str]:
+    preferences = load_parser_preferences(config)
+    if preference:
+        preferences[system] = preference
+    else:
+        preferences.pop(system, None)
+    path = parser_preferences_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(preferences, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+    return preferences
+
+
+def select_parser_candidate(
+    candidates: list[tuple[dict[str, Any], int]], preference: str | None
+) -> dict[str, Any] | None:
     if not candidates:
         return None
+    if preference:
+        preferred = next(
+            (item for item, _ in candidates if preference.casefold() in str(item.get("configTitle", "")).casefold()),
+            None,
+        )
+        if preferred is not None:
+            return preferred
     return candidates[0][0]
+
+
+def _find_parser(
+    parsers: list[dict[str, Any]], entry: GameEntry, config: AppConfig, preference: str | None = None
+) -> dict[str, Any] | None:
+    return select_parser_candidate(_find_parser_candidates(parsers, entry, config), preference)
 
 
 def _replace_file_path(template: str, entry: GameEntry) -> str:
@@ -167,10 +211,13 @@ def build_srm_preview(config: AppConfig, manifest: Manifest) -> dict[str, Any]:
     parser_file = config.home / ".config/steam-rom-manager/userData/userConfigurations.json"
     raw_parsers = _read_json(parser_file)
     parsers = raw_parsers if isinstance(raw_parsers, list) else []
+    preferences = load_parser_preferences(config)
     entries: list[SrmPreviewEntry] = []
     unmatched: list[dict[str, str]] = []
     for entry in manifest.entries:
-        parser = _find_parser([item for item in parsers if isinstance(item, dict)], entry, config)
+        parser = _find_parser(
+            [item for item in parsers if isinstance(item, dict)], entry, config, preferences.get(entry.system)
+        )
         if parser is None:
             unmatched.append({
                 "id": entry.id,
