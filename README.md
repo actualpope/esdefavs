@@ -1,4 +1,4 @@
-# EmuDeck Favorites Sync 0.7.0
+# EmuDeck Favorites Sync 0.7.1
 
 Et lite Steam Deck-program som syncer ES-DE-favoritter til Steam.
 

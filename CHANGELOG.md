@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.1 — 2026-07-07
+
+- Varsler nå når flere SRM-parsere er like gode kandidater for samme system (for eksempel to Nintendo Switch-parsere, én for et gammelt emulatorvalg og én for et nytt). Tidligere valgte programmet stille én av dem uten å vise at det var tvetydig; nå navngis alle konkurrerende parsere i en advarsel, og du får beskjed om å deaktivere den du ikke vil bruke i Steam ROM Manager.
+- Varsler nå når en SRM-parsers kjørbare fil ikke lar seg løse til en faktisk sti (tom `target` etter variabel-oppløsning), i stedet for å stille skrive en tom/ødelagt oppføring som ikke starter i det hele tatt.
+- Disse varslene vises nå også i "Oppdater ES-DE favoritter" sin korte tilbakemelding i kontrollpanelet.
+- `compatibility-report` viser nå alle SRM-miljøvariabler (`environment_variables`), ikke bare `steamDirectory`, for lettere feilsøking av emulatorer som ikke starter.
+- Siden "Oppdater ES-DE favoritter" alltid leser alle nåværende favoritter på nytt og skriver hele SRM-oppsettet på nytt hver gang (ikke bare det som er endret), vil disse variablene automatisk rette opp allerede lagte-til spill neste gang knappen trykkes, så snart den underliggende parser-konflikten eller variabelen er løst.
+
 ## 0.7.0 — 2026-07-07
 
 - Stor forenkling: kontrollpanelet har nå bare tre knapper: `Oppdater ES-DE favoritter`, `Se ES-DE Favoritter` og `Oppdater program`.

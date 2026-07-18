@@ -118,13 +118,11 @@ def collect_compatibility(config: AppConfig) -> dict[str, Any]:
         value, settings_error = _safe_json(settings_file)
         if isinstance(value, dict):
             preview = value.get("previewSettings") if isinstance(value.get("previewSettings"), dict) else {}
+            environment_variables = value.get("environmentVariables")
             settings_summary = {
                 "delete_disabled_shortcuts": preview.get("deleteDisabledShortcuts"),
                 "disable_categories": preview.get("disableCategories"),
-                "environment_steam_directory": (
-                    value.get("environmentVariables", {}).get("steamDirectory")
-                    if isinstance(value.get("environmentVariables"), dict) else None
-                ),
+                "environment_variables": environment_variables if isinstance(environment_variables, dict) else {},
             }
 
     srm_appimage = find_srm_appimage(config)

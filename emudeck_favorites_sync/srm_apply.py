@@ -12,7 +12,7 @@ from typing import Any
 
 from .config import AppConfig
 from .models import Diagnostic, Manifest
-from .srm_preview import _find_parser
+from .srm_preview import _find_parser_candidates
 
 
 OWNED_PARSER_PREFIX = "emudeck-favorites-sync:"
@@ -294,9 +294,10 @@ def stage_apply(
     raw_parsers = [item for item in parsers if isinstance(item, dict)]
     grouped_entries: dict[str, list[dict[str, Any]]] = {}
     grouped_parsers: dict[str, dict[str, Any]] = {}
+    ambiguous_systems_warned: set[str] = set()
     for entry in manifest.entries:
-        source = _find_parser(raw_parsers, entry, config)
-        if source is None:
+        candidates = _find_parser_candidates(raw_parsers, entry, config)
+        if not candidates:
             result.diagnostics.append(Diagnostic(
                 "error", "NO_MATCHING_SRM_PARSER",
                 f"No matching SRM parser found for {entry.system} / {entry.title}.",
@@ -304,8 +305,32 @@ def stage_apply(
                 entry.resolved_rom_path,
             ))
             continue
+        source = candidates[0][0]
+        if len(candidates) > 1 and candidates[0][1] == candidates[1][1] and entry.system not in ambiguous_systems_warned:
+            ambiguous_systems_warned.add(entry.system)
+            competing = ", ".join(
+                f"'{item.get('configTitle') or item.get('parserId') or '?'}'" for item, score in candidates
+                if score == candidates[0][1]
+            )
+            result.diagnostics.append(Diagnostic(
+                "warning", "AMBIGUOUS_SRM_PARSER",
+                f"Multiple SRM parsers match {entry.system} equally well ({competing}); "
+                f"used '{source.get('configTitle')}'. If this is the wrong emulator, disable the unwanted "
+                "parser(s) in Steam ROM Manager and run 'Oppdater ES-DE favoritter' again.",
+                entry.system,
+            ))
+        manual_entry = _manual_entry(entry, source, environment)
+        source_target = str((source.get("executable") or {}).get("path") or "")
+        if source_target.strip() and not manual_entry["target"].strip():
+            result.diagnostics.append(Diagnostic(
+                "warning", "UNRESOLVED_SRM_VARIABLE",
+                f"{entry.system} / {entry.title}: the executable path {source_target!r} resolved to empty; "
+                "the emulator will not launch. Check Steam ROM Manager's global/environment variables for "
+                "this system's parser.",
+                entry.system, entry.resolved_rom_path,
+            ))
         grouped_parsers[entry.system] = source
-        grouped_entries.setdefault(entry.system, []).append(_manual_entry(entry, source, environment))
+        grouped_entries.setdefault(entry.system, []).append(manual_entry)
     if any(item.severity == "error" for item in result.diagnostics):
         return result
 

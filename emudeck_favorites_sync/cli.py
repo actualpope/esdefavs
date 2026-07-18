@@ -457,13 +457,23 @@ def _autosync_status(args: argparse.Namespace) -> int:
 def _print_autosync_summary(result: dict[str, object]) -> None:
     state = result.get("state") or {}
     count = len(state.get("favorites") or [])
+    apply_result = result.get("apply") or {}
+    warnings = [
+        item for item in apply_result.get("diagnostics", [])
+        if isinstance(item, dict) and item.get("severity") == "warning"
+    ]
     if result.get("reason") == "Steam is running":
         print(f"Steam kjører. Lukk Steam helt og prøv igjen. ({count} favoritter registrert.)")
         return
     if result.get("synced"):
         print(f"Ferdig. {count} favoritt(er) er synkronisert til Steam.")
+        if warnings:
+            print(f"\n{len(warnings)} advarsel(er):")
+            for item in warnings:
+                location = f" [{item.get('system')}]" if item.get("system") else ""
+                print(f"  {location} {item.get('message')}")
         return
-    error = state.get("last_error") or "Ukjent feil. Bruk 'Lag feilsøkingsrapport' for detaljer."
+    error = state.get("last_error") or "Ukjent feil. Kjør 'compatibility-report' i terminal for detaljer."
     print(f"Kunne ikke oppdatere Steam: {error}")
 
 

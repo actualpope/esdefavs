@@ -116,12 +116,19 @@ def _parser_score(parser: dict[str, Any], entry: GameEntry, config: AppConfig) -
     return score
 
 
+def _find_parser_candidates(
+    parsers: list[dict[str, Any]], entry: GameEntry, config: AppConfig
+) -> list[tuple[dict[str, Any], int]]:
+    scored = [(item, _parser_score(item, entry, config)) for item in parsers]
+    qualifying = [(item, score) for item, score in scored if score >= 100]
+    qualifying.sort(key=lambda pair: pair[1], reverse=True)
+    return qualifying
+
+
 def _find_parser(parsers: list[dict[str, Any]], entry: GameEntry, config: AppConfig) -> dict[str, Any] | None:
-    candidates = [(item, _parser_score(item, entry, config)) for item in parsers]
-    candidates = [(item, score) for item, score in candidates if score >= 100]
+    candidates = _find_parser_candidates(parsers, entry, config)
     if not candidates:
         return None
-    candidates.sort(key=lambda item: item[1], reverse=True)
     return candidates[0][0]
 
 

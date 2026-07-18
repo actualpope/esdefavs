@@ -312,6 +312,94 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(manifest[0]["target"], "/usr/bin/retroarch")
         self.assertIn("/usr/lib/libretro/mgba_libretro.so", manifest[0]["launchOptions"])
 
+    def test_apply_warns_when_multiple_parsers_tie_for_same_system(self) -> None:
+        self.fx.add_system("switch", gamelist(game("./Game.nsp", "Game")), ("Game.nsp",))
+        parser_dir = self.fx.home / ".config/steam-rom-manager/userData"
+        parser_dir.mkdir(parents=True, exist_ok=True)
+
+        def make_parser(parser_id: str, config_title: str, executable_path: str) -> dict:
+            return {
+                "configTitle": config_title,
+                "parserType": "Glob",
+                "parserId": parser_id,
+                "disabled": False,
+                "steamDirectory": "${steamdirglobal}",
+                "romDirectory": "${romsdirglobal}/switch",
+                "steamCategories": ["Nintendo Switch"],
+                "imageProviders": ["sgdb"],
+                "onlineImageQueries": ["${fuzzyTitle}"],
+                "userAccounts": {"specifiedAccounts": ["Global"]},
+                "controllers": {},
+                "executable": {"path": executable_path, "appendArgsToExecutable": True},
+                "executableArgs": '"${filePath}"',
+                "startInDirectory": "",
+                "parserInputs": {"glob": "{switch/**,switch}/${title}.nsp"},
+            }
+
+        (parser_dir / "userConfigurations.json").write_text(json.dumps([
+            make_parser("source-switch-citron", "Nintendo Switch - Citron", "/Emulation/tools/launchers/citron.sh"),
+            make_parser("source-switch-eden", "Nintendo Switch - Eden", "/Emulation/tools/launchers/eden.sh"),
+        ]), encoding="utf-8")
+        (parser_dir / "userSettings.json").write_text(json.dumps({
+            "previewSettings": {"deleteDisabledShortcuts": False},
+            "environmentVariables": {
+                "steamDirectory": str(self.fx.home / ".steam/steam"),
+                "romsDirectory": str(self.fx.roms),
+            },
+        }), encoding="utf-8")
+
+        config = self.fx.config()
+        result = stage_apply(config, scan(config), dry_run=False, steam_running=False)
+        self.assertTrue(result.ok)
+        ambiguous = [item for item in result.diagnostics if item.code == "AMBIGUOUS_SRM_PARSER"]
+        self.assertEqual(len(ambiguous), 1)
+        self.assertIn("Citron", ambiguous[0].message)
+        self.assertIn("Eden", ambiguous[0].message)
+        manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/switch/favorites.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest[0]["target"], "/Emulation/tools/launchers/citron.sh")
+
+    def test_apply_warns_when_srm_variable_does_not_resolve(self) -> None:
+        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
+        parser_dir = self.fx.home / ".config/steam-rom-manager/userData"
+        parser_dir.mkdir(parents=True, exist_ok=True)
+        (parser_dir / "userConfigurations.json").write_text(json.dumps([{
+            "configTitle": "Nintendo Game Boy Advance - RetroArch mGBA",
+            "parserType": "Glob",
+            "parserId": "source-gba",
+            "disabled": True,
+            "steamDirectory": "${steamdirglobal}",
+            "romDirectory": "${romsdirglobal}",
+            "steamCategories": ["Nintendo Game Boy Advance"],
+            "imageProviders": ["sgdb"],
+            "onlineImageQueries": ["${fuzzyTitle}"],
+            "userAccounts": {"specifiedAccounts": ["Global"]},
+            "controllers": {},
+            "executable": {"path": "${retroarchpath}", "appendArgsToExecutable": True},
+            "executableArgs": '-L ${racores}${/}mgba_libretro.${os:linux|so} "${filePath}"',
+            "startInDirectory": "",
+            "parserInputs": {"glob": "{gba/**,gba}/${title}@(.zip)"},
+        }]), encoding="utf-8")
+        (parser_dir / "userSettings.json").write_text(json.dumps({
+            "previewSettings": {"deleteDisabledShortcuts": False},
+            "environmentVariables": {
+                "steamDirectory": str(self.fx.home / ".steam/steam"),
+                "romsDirectory": str(self.fx.roms),
+                # Intentionally missing "retroarchPath" and "raCoresDirectory", simulating
+                # SRM global variables that were never configured or use different key names.
+            },
+        }), encoding="utf-8")
+
+        config = self.fx.config()
+        result = stage_apply(config, scan(config), dry_run=False, steam_running=False)
+        self.assertTrue(result.ok)
+        unresolved = [item for item in result.diagnostics if item.code == "UNRESOLVED_SRM_VARIABLE"]
+        self.assertEqual(len(unresolved), 1)
+        self.assertIn("retroarchpath", unresolved[0].message.casefold())
+        manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/gba/favorites.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest[0]["target"], "")
+
     def test_apply_preserves_owned_parser_when_system_has_no_current_favorites(self) -> None:
         self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
         parser_dir = self.add_srm_gba_parser()
