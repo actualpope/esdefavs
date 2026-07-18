@@ -1,4 +1,4 @@
-# EmuDeck Favorites Sync 0.7.2
+# EmuDeck Favorites Sync 0.7.3
 
 Et lite Steam Deck-program som syncer ES-DE-favoritter til Steam.
 
@@ -84,7 +84,8 @@ Der får du en enkel meny:
 - **Oppdater ES-DE favoritter** — leser gjeldende favoritter fra ES-DE og synkroniserer dem til Steam via SRM, hvis Steam er lukket.
 - **Se ES-DE Favoritter** — viser en ren liste over hvilke spill som er favorittmerket akkurat nå. Endrer ingenting.
 - **Oppdater program** — henter siste versjon fra GitHub.
-- **Reset (fjern alt fra Steam/SRM)** — viser først nøyaktig hva som vil bli fjernet, ber om bekreftelse, og fjerner deretter alle `ES-DE Favorites Sync`-parsere, manifester og Steam-snarveier programmet har laget. Rører ikke ES-DE sine egne favoritter eller andre SRM-parsere.
+- **Reset (fjern alt fra Steam/SRM)** — viser først nøyaktig hva som vil bli fjernet, ber om bekreftelse, og fjerner deretter alle `ES-DE Favorites Sync`-parsere, manifester og Steam-snarveier programmet har laget. Rører ikke ES-DE sine egne favoritter eller andre SRM-parsere. Bruk denne for å starte helt friskt, og trykk så `Oppdater ES-DE favoritter` for å bygge alt opp igjen rent.
+- **Feilsøking** — viser for hvert system med favoritter hvilken SRM-parser som ble brukt, hvilken kjørbar fil den løste til, og om flere parsere konkurrerte om samme system. Nyttig når et spill ikke starter riktig i Steam.
 
 Vanlig bruk er bare:
 

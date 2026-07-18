@@ -441,3 +441,57 @@ def purge_owned_parsers(config: AppConfig, *, dry_run: bool) -> PurgeResult:
     if manual_root.exists():
         shutil.rmtree(manual_root)
     return result
+
+
+def describe_parser_matches(config: AppConfig, manifest: Manifest) -> list[dict[str, Any]]:
+    """Per-system breakdown of which SRM parser a favorite would use and why, for troubleshooting."""
+    srm_user_data = config.home / ".config/steam-rom-manager/userData"
+    parser_file = srm_user_data / "userConfigurations.json"
+    settings_file = srm_user_data / "userSettings.json"
+    results: list[dict[str, Any]] = []
+
+    try:
+        parsers = _read_json(parser_file) if parser_file.is_file() else []
+    except (OSError, ValueError, TypeError):
+        parsers = []
+    raw_parsers = [item for item in parsers if isinstance(item, dict)] if isinstance(parsers, list) else []
+
+    environment: dict[str, str] = {}
+    try:
+        settings = _read_json(settings_file) if settings_file.is_file() else {}
+    except (OSError, ValueError, TypeError):
+        settings = {}
+    if isinstance(settings, dict):
+        environment = _settings_environment(settings)
+
+    seen_systems: set[str] = set()
+    for entry in manifest.entries:
+        if entry.system in seen_systems:
+            continue
+        seen_systems.add(entry.system)
+        candidates = _find_parser_candidates(raw_parsers, entry, config)
+        if not candidates:
+            results.append({
+                "system": entry.system, "example_title": entry.title,
+                "matched_parser": None, "resolved_target": None, "resolved_launch_options": None,
+                "unresolved_target": False, "competing_parsers": [],
+            })
+            continue
+        source = candidates[0][0]
+        manual_entry = _manual_entry(entry, source, environment)
+        source_target = str((source.get("executable") or {}).get("path") or "")
+        competing = (
+            [str(item.get("configTitle") or item.get("parserId")) for item, score in candidates if score == candidates[0][1]]
+            if len(candidates) > 1 and candidates[0][1] == candidates[1][1] else []
+        )
+        results.append({
+            "system": entry.system,
+            "example_title": entry.title,
+            "matched_parser": str(source.get("configTitle") or source.get("parserId") or "?"),
+            "parser_disabled": bool(source.get("disabled", False)),
+            "resolved_target": manual_entry["target"],
+            "resolved_launch_options": manual_entry["launchOptions"],
+            "unresolved_target": bool(source_target.strip() and not manual_entry["target"].strip()),
+            "competing_parsers": competing,
+        })
+    return results

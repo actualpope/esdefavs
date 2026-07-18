@@ -49,6 +49,7 @@ Hva vil du gjøre?"
       list "Se ES-DE Favoritter" \
       update "Oppdater program" \
       reset "Reset (fjern alt fra Steam/SRM)" \
+      debug "Feilsøking" \
       quit "Lukk"
   elif have zenity; then
     zenity --title="$title" --text="$prompt" --list --column=valg --column=handling --hide-column=1 \
@@ -56,6 +57,7 @@ Hva vil du gjøre?"
       list "Se ES-DE Favoritter" \
       update "Oppdater program" \
       reset "Reset (fjern alt fra Steam/SRM)" \
+      debug "Feilsøking" \
       quit "Lukk"
   else
     echo "GUI-verktøy mangler. Installer kdialog/zenity eller bruk terminalkommandoene."
@@ -127,6 +129,9 @@ Er du sikker på at du vil fjerne ALT dette fra Steam og Steam ROM Manager? ES-D
       if [[ "$confirmed" -eq 1 ]]; then
         run_and_show "Reset" "$APP" reset --confirm
       fi
+      ;;
+    debug)
+      run_and_show "Feilsøking" "$APP" compatibility-report
       ;;
     quit|"")
       exit 0

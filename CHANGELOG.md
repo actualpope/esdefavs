@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.3 — 2026-07-07
+
+- Ny knapp **Feilsøking** i kontrollpanelet, som kjører den eksisterende `compatibility-report` og viser resultatet direkte i et vindu i stedet for bare å lagre en JSON-fil.
+- Rapporten viser nå en egen "Emulator-matching per system"-oversikt: for hvert system med favoritter, hvilken SRM-parser som ble brukt, hvilken kjørbar fil den løste til, og om flere parsere konkurrerte om samme system. Dette gjør det mulig å se GBA/SNES/Switch-type problemer direkte, uten å måtte dele rå JSON.
+
 ## 0.7.2 — 2026-07-07
 
 - Fikser en reell duplikat-bug: hvis kun emulatoren/kjørbar fil for et favorittspill endret seg mellom to synkroniseringer (for eksempel etter å ha byttet fra én emulator til en annen for samme system), ble ikke den gamle Steam-oppføringen lenger gjenkjent som utdatert, og ble derfor liggende igjen som en duplikat ved siden av den nye. Opprydding krever nå at selve den kjørbare filen også stemmer, ikke bare tittel og argumenter.

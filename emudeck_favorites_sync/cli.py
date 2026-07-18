@@ -15,7 +15,7 @@ from .models import Diagnostic, Manifest, Plan
 from .planner import build_plan
 from .scanner import scan
 from .state import load_manifest, save_manifest_atomic
-from .srm_apply import stage_apply
+from .srm_apply import describe_parser_matches, stage_apply
 from .srm_cli import run_srm_add_owned, run_srm_remove_owned, set_srm_app_path
 from .srm_preview import build_srm_preview
 from .steam_shortcuts import import_to_steam
@@ -685,6 +685,8 @@ def _compatibility_report(args: argparse.Namespace) -> int:
     manifest = scan(config)
     report = collect_compatibility(config)
     report["scan"] = manifest.to_dict()
+    parser_matches = describe_parser_matches(config, manifest)
+    report["parser_matches"] = parser_matches
     output = Path(args.output).expanduser() if args.output else config.home / "Desktop/emudeck-favorites-sync-report.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_name(f".{output.name}.tmp")
@@ -694,11 +696,25 @@ def _compatibility_report(args: argparse.Namespace) -> int:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
         _print_header()
-        print(f"Read-only compatibility report created:\n  {output}")
-        print(f"\nSRM parsers: {len(report['srm']['parsers'])}")
+        print(f"SRM parsers: {len(report['srm']['parsers'])}")
         print(f"Steam users: {len(report['steam']['users'])}")
         print(f"Valid favorites: {len(manifest.entries)}")
-        print("No Steam, SRM or EmuDeck configuration was changed.")
+        print("\nEmulator-matching per system:")
+        if not parser_matches:
+            print("  (ingen favoritter å sjekke)")
+        for item in parser_matches:
+            if item["matched_parser"] is None:
+                print(f"  {item['system']:10} ({item['example_title']}): INGEN SRM-parser funnet")
+                continue
+            problem = ""
+            if item["unresolved_target"]:
+                problem = "  <-- KJØRBAR FIL LØSER TIL TOMT, VIL IKKE STARTE"
+            print(f"  {item['system']:10} {item['example_title']:20} -> {item['matched_parser']}{problem}")
+            print(f"               target: {item['resolved_target'] or '(tomt)'}")
+            if item["competing_parsers"]:
+                print(f"               ADVARSEL: like god match mot: {', '.join(item['competing_parsers'])}")
+        print(f"\nRapport lagret: {output}")
+        print("Ingen Steam-, SRM- eller EmuDeck-konfigurasjon ble endret.")
     return 2 if manifest.scan_health.get("errors") else 0
 
 

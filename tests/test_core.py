@@ -22,7 +22,7 @@ from emudeck_favorites_sync.cli import _print_autosync_summary, main as cli_main
 from emudeck_favorites_sync.models import Diagnostic, GameEntry, Manifest, SystemHealth
 from emudeck_favorites_sync.planner import build_plan
 from emudeck_favorites_sync.scanner import scan
-from emudeck_favorites_sync.srm_apply import purge_owned_parsers, stage_apply
+from emudeck_favorites_sync.srm_apply import describe_parser_matches, purge_owned_parsers, stage_apply
 from emudeck_favorites_sync.srm_cli import SrmCliResult, find_srm_appimage, set_srm_app_path
 from emudeck_favorites_sync.state import load_manifest, save_manifest_atomic
 from emudeck_favorites_sync.srm_preview import build_srm_preview
@@ -407,6 +407,53 @@ class ScannerTests(unittest.TestCase):
         manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/gba/favorites.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(manifest[0]["target"], "")
+
+        matches = describe_parser_matches(config, scan(config))
+        gba_match = next(item for item in matches if item["system"] == "gba")
+        self.assertTrue(gba_match["unresolved_target"])
+        self.assertEqual(gba_match["resolved_target"], "")
+
+    def test_describe_parser_matches_flags_ambiguous_and_healthy_systems(self) -> None:
+        self.fx.add_system("switch", gamelist(game("./Game.nsp", "Game")), ("Game.nsp",))
+        self.fx.add_system("gba", gamelist(game("./Other.zip", "Other")), ("Other.zip",))
+        self.add_srm_gba_parser()
+        parser_dir = self.fx.home / ".config/steam-rom-manager/userData"
+
+        def make_switch_parser(parser_id: str, config_title: str, executable_path: str) -> dict:
+            return {
+                "configTitle": config_title,
+                "parserType": "Glob",
+                "parserId": parser_id,
+                "disabled": False,
+                "steamDirectory": "${steamdirglobal}",
+                "romDirectory": "${romsdirglobal}/switch",
+                "steamCategories": ["Nintendo Switch"],
+                "imageProviders": ["sgdb"],
+                "onlineImageQueries": ["${fuzzyTitle}"],
+                "userAccounts": {"specifiedAccounts": ["Global"]},
+                "controllers": {},
+                "executable": {"path": executable_path, "appendArgsToExecutable": True},
+                "executableArgs": '"${filePath}"',
+                "startInDirectory": "",
+                "parserInputs": {"glob": "{switch/**,switch}/${title}.nsp"},
+            }
+
+        configs = json.loads((parser_dir / "userConfigurations.json").read_text(encoding="utf-8"))
+        configs.append(make_switch_parser("source-switch-citron", "Nintendo Switch - Citron", "/Emulation/tools/launchers/citron.sh"))
+        configs.append(make_switch_parser("source-switch-eden", "Nintendo Switch - Eden", "/Emulation/tools/launchers/eden.sh"))
+        (parser_dir / "userConfigurations.json").write_text(json.dumps(configs), encoding="utf-8")
+
+        config = self.fx.config()
+        matches = describe_parser_matches(config, scan(config))
+        by_system = {item["system"]: item for item in matches}
+
+        self.assertEqual(by_system["switch"]["matched_parser"], "Nintendo Switch - Citron")
+        self.assertEqual(by_system["switch"]["competing_parsers"], ["Nintendo Switch - Citron", "Nintendo Switch - Eden"])
+
+        self.assertEqual(by_system["gba"]["matched_parser"], "Nintendo Game Boy Advance - RetroArch mGBA")
+        self.assertEqual(by_system["gba"]["competing_parsers"], [])
+        self.assertFalse(by_system["gba"]["unresolved_target"])
+        self.assertEqual(by_system["gba"]["resolved_target"], "/usr/bin/retroarch")
 
     def test_apply_preserves_owned_parser_when_system_has_no_current_favorites(self) -> None:
         self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
