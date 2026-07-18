@@ -59,11 +59,11 @@ EOF
 chmod 0644 "$INSTALL_DIR/EmuDeck Favorites Sync.desktop"
 install -m 0755 "$INSTALL_DIR/EmuDeck Favorites Sync.desktop" "$DESKTOP_DIR/EmuDeck Favorites Sync.desktop"
 
+systemctl --user disable --now emudeck-favorites-sync.timer >/dev/null 2>&1 || true
+systemctl --user disable --now emudeck-favorites-sync.service >/dev/null 2>&1 || true
+"${BIN_DIR}/emudeck-favorites-sync" autosync-off >/dev/null 2>&1 || true
 if [[ "$SERVICE_WAS_ACTIVE" -eq 1 || "$TIMER_WAS_ACTIVE" -eq 1 ]]; then
-  systemctl --user disable --now emudeck-favorites-sync.timer >/dev/null 2>&1 || true
-  systemctl --user stop emudeck-favorites-sync.service >/dev/null 2>&1 || true
-  "${BIN_DIR}/emudeck-favorites-sync" autosync-on >/dev/null 2>&1 || true
-  echo "Autosync was already enabled and has been restarted with the latest version."
+  echo "Background autosync was running and has been turned off; use 'Oppdater ES-DE favoritter' in the control panel instead."
 fi
 
 echo "Installed EmuDeck Favorites Sync."
@@ -72,17 +72,11 @@ echo "Graphical control panel:"
 echo "  ${INSTALL_DIR}/EmuDeck Favorites Sync.desktop"
 echo "  ${DESKTOP_DIR}/EmuDeck Favorites Sync.desktop"
 echo
-echo "Simple autosync commands:"
-echo "  ${BIN_DIR}/emudeck-favorites-sync autosync-on"
-echo "  ${BIN_DIR}/emudeck-favorites-sync autosync-status"
-echo "  ${BIN_DIR}/emudeck-favorites-sync autosync-off"
-echo
-echo "You can also run these helper scripts from this extracted folder:"
-echo "  bash sync-on.sh"
-echo "  bash sync-status.sh"
-echo "  bash sync-off.sh"
+echo "Usage:"
+echo "  ${BIN_DIR}/emudeck-favorites-sync list-favorites"
+echo "  ${BIN_DIR}/emudeck-favorites-sync autosync-now --summary"
 echo
 if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then
   echo "Note: ${BIN_DIR} is not currently on PATH. Use the full command above,"
-  echo "or restart your terminal and try: emudeck-favorites-sync autosync-status"
+  echo "or restart your terminal and try: emudeck-favorites-sync list-favorites"
 fi

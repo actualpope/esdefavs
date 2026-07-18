@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0 — 2026-07-07
+
+- Stor forenkling: kontrollpanelet har nå bare tre knapper: `Oppdater ES-DE favoritter`, `Se ES-DE Favoritter` og `Oppdater program`.
+- Fjerner automatisk bakgrunnssynkronisering fra standardoppsettet. Programmet oppdager ikke lenger favorittendringer av seg selv; alt skjer når du trykker `Oppdater ES-DE favoritter`.
+- Installering/oppdatering slår nå aktivt av en eventuell tidligere aktivert autosync-bakgrunnstjeneste i stedet for å gjenopprette den.
+- Ny kommando `list-favorites`: viser bare hvilke spill som er favorittmerket i ES-DE akkurat nå, uten å endre noe.
+- `autosync-now` har fått et nytt `--summary`-flagg som gir en kort, lesbar tilbakemelding (`Ferdig. N favoritt(er) er synkronisert til Steam.` / `Steam kjører...` / feilmelding) i stedet for hele statusdumpen. Kontrollpanelet bruker dette.
+- `autosync-on`/`autosync-off`/bakgrunnstjenesten finnes fortsatt i terminalkommandoene for den som ønsker det, men er ikke lenger en del av standardbruken eller kontrollpanelet.
+
 ## 0.6.20 — 2026-07-07
 
 - Varsler nå ved scan hvis en PS2-favoritt er en multi-disc M3U-mappe: PCSX2 støtter ikke `.m3u`-avspillingslister (PCSX2/pcsx2#7640, #6696), så hver disk bør favorittmerkes som egen oppføring i stedet. Varselet blokkerer ikke synkronisering av spillet.

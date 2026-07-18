@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import tempfile
 import unittest
@@ -15,7 +17,7 @@ from emudeck_favorites_sync.autosync import (
     save_last_srm_entries,
 )
 from emudeck_favorites_sync.config import discover_config
-from emudeck_favorites_sync.cli import main as cli_main
+from emudeck_favorites_sync.cli import _print_autosync_summary, main as cli_main
 from emudeck_favorites_sync.models import Diagnostic, GameEntry, Manifest, SystemHealth
 from emudeck_favorites_sync.planner import build_plan
 from emudeck_favorites_sync.scanner import scan
@@ -650,6 +652,21 @@ class ScannerTests(unittest.TestCase):
         shortcuts = read_shortcuts(steam_config_dir / "shortcuts.vdf")
         self.assertEqual([item["AppName"] for item in shortcuts], [])
 
+    def test_list_favorites_prints_current_favorites_read_only(self) -> None:
+        self.fx.add_system("ps2", gamelist(game("./Game.chd", "Game")), ("Game.chd",))
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = cli_main([
+                "--esde-dir", str(self.fx.esde), "--roms-dir", str(self.fx.roms),
+                "--state-dir", str(self.fx.state), "--home", str(self.fx.home),
+                "list-favorites",
+            ])
+        self.assertEqual(code, 0)
+        output = buffer.getvalue()
+        self.assertIn("ps2", output)
+        self.assertIn("Game", output)
+        self.assertFalse((self.fx.state / "desired.json").exists())
+
 
 class StateAndPlanTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -732,6 +749,36 @@ class CliTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as raised:
             cli_main(["set-srm-path", "--help"])
         self.assertEqual(raised.exception.code, 0)
+
+    def test_list_favorites_is_registered(self) -> None:
+        with self.assertRaises(SystemExit) as raised:
+            cli_main(["list-favorites", "--help"])
+        self.assertEqual(raised.exception.code, 0)
+
+    def test_autosync_now_summary_flag_is_registered(self) -> None:
+        with self.assertRaises(SystemExit) as raised:
+            cli_main(["autosync-now", "--help"])
+        self.assertEqual(raised.exception.code, 0)
+
+    def test_autosync_summary_reports_steam_running(self) -> None:
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            _print_autosync_summary({"reason": "Steam is running", "state": {"favorites": [{}]}})
+        self.assertIn("Steam kjører", buffer.getvalue())
+
+    def test_autosync_summary_reports_synced_count(self) -> None:
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            _print_autosync_summary({"synced": True, "state": {"favorites": [{}, {}]}})
+        self.assertIn("Ferdig", buffer.getvalue())
+        self.assertIn("2", buffer.getvalue())
+
+    def test_autosync_summary_reports_error(self) -> None:
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            _print_autosync_summary({"synced": False, "state": {"favorites": [], "last_error": "SRM feilet"}})
+        self.assertIn("Kunne ikke oppdatere", buffer.getvalue())
+        self.assertIn("SRM feilet", buffer.getvalue())
 
 
 if __name__ == "__main__":

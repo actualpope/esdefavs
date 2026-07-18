@@ -47,7 +47,11 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser("autosync-on", help="Turn on background sync after Steam closes")
     subparsers.add_parser("autosync-off", help="Turn off background sync")
     subparsers.add_parser("autosync-status", help="Show whether background sync is on, pending, and what is favorited")
-    subparsers.add_parser("autosync-now", help="Run one autosync cycle now")
+    autosync_now_parser = subparsers.add_parser("autosync-now", help="Run one autosync cycle now")
+    autosync_now_parser.add_argument(
+        "--summary", action="store_true", help="Print a short human-readable result instead of the full status"
+    )
+    subparsers.add_parser("list-favorites", help="Show which ES-DE games are currently favorited (read-only)")
     subparsers.add_parser("esde-closed", help=argparse.SUPPRESS)
     subparsers.add_parser("srm-add-now", help="Run Steam ROM Manager add for the ES-DE Favorites Sync parsers now")
     subparsers.add_parser("srm-remove-now", help="Run Steam ROM Manager remove for the ES-DE Favorites Sync parsers now")
@@ -450,11 +454,26 @@ def _autosync_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_autosync_summary(result: dict[str, object]) -> None:
+    state = result.get("state") or {}
+    count = len(state.get("favorites") or [])
+    if result.get("reason") == "Steam is running":
+        print(f"Steam kjører. Lukk Steam helt og prøv igjen. ({count} favoritter registrert.)")
+        return
+    if result.get("synced"):
+        print(f"Ferdig. {count} favoritt(er) er synkronisert til Steam.")
+        return
+    error = state.get("last_error") or "Ukjent feil. Bruk 'Lag feilsøkingsrapport' for detaljer."
+    print(f"Kunne ikke oppdatere Steam: {error}")
+
+
 def _autosync_now(args: argparse.Namespace) -> int:
     config = _config(args)
     result = autosync_once(config, force=True)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif getattr(args, "summary", False):
+        _print_autosync_summary(result)
     else:
         _print_header()
         print(f"Changed:       {'yes' if result.get('changed') else 'no'}")
@@ -465,6 +484,24 @@ def _autosync_now(args: argparse.Namespace) -> int:
         print()
         _print_autosync_status(autosync_status(config))
     return 0 if result.get("synced") or result.get("reason") in {"no pending changes", "Steam is running"} else 2
+
+
+def _list_favorites(args: argparse.Namespace) -> int:
+    config = _config(args)
+    manifest = scan(config)
+    if args.json:
+        print(json.dumps({"favorites": [entry.to_dict() for entry in manifest.entries]}, ensure_ascii=False, indent=2))
+    else:
+        _print_header()
+        if not manifest.entries:
+            print("Ingen favoritter funnet i ES-DE.")
+        else:
+            print(f"Favoritter ({len(manifest.entries)}):\n")
+            for entry in manifest.entries:
+                print(f"  {entry.system:12} {entry.title}")
+        if manifest.scan_health.get("errors"):
+            print("\nMerk: enkelte systemer kunne ikke leses. Kjør 'doctor' for detaljer.")
+    return 2 if manifest.scan_health.get("errors") else 0
 
 
 def _autosync_check(args: argparse.Namespace) -> int:
@@ -646,6 +683,8 @@ def main(argv: list[str] | None = None) -> int:
         return _autosync_status(args)
     if args.command == "autosync-now":
         return _autosync_now(args)
+    if args.command == "list-favorites":
+        return _list_favorites(args)
     if args.command == "autosync-check":
         return _autosync_check(args)
     if args.command == "esde-closed":

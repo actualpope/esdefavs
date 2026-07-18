@@ -45,25 +45,15 @@ Hva vil du gjøre?"
   fi
   if have kdialog; then
     kdialog --title "$title" --menu "$prompt" \
-      on "Skru på automatisk sync" \
-      off "Skru av automatisk sync" \
-      status "Status og favoritter" \
-      now "Oppdater Steam nå" \
-      update "Oppdater programmet fra GitHub" \
-      choose_srm "Velg SRM AppImage" \
-      import "Importer stagede favoritter til Steam nå" \
-      report "Lag feilsøkingsrapport" \
+      now "Oppdater ES-DE favoritter" \
+      list "Se ES-DE Favoritter" \
+      update "Oppdater program" \
       quit "Lukk"
   elif have zenity; then
     zenity --title="$title" --text="$prompt" --list --column=valg --column=handling --hide-column=1 \
-      on "Skru på automatisk sync" \
-      off "Skru av automatisk sync" \
-      status "Status og favoritter" \
-      now "Oppdater Steam nå" \
-      update "Oppdater programmet fra GitHub" \
-      choose_srm "Velg SRM AppImage" \
-      import "Importer stagede favoritter til Steam nå" \
-      report "Lag feilsøkingsrapport" \
+      now "Oppdater ES-DE favoritter" \
+      list "Se ES-DE Favoritter" \
+      update "Oppdater program" \
       quit "Lukk"
   else
     echo "GUI-verktøy mangler. Installer kdialog/zenity eller bruk terminalkommandoene."
@@ -109,38 +99,14 @@ fi
 while true; do
   choice="$(choose || true)"
   case "$choice" in
-    on)
-      run_and_show "Autosync på" "$APP" autosync-on
-      ;;
-    off)
-      run_and_show "Autosync av" "$APP" autosync-off
-      ;;
-    status)
-      run_and_show "Status" "$APP" autosync-status
-      ;;
     now)
-      run_and_show "Oppdater Steam nå" "$APP" autosync-now
+      run_and_show "Oppdater ES-DE favoritter" "$APP" autosync-now --summary
+      ;;
+    list)
+      run_and_show "ES-DE Favoritter" "$APP" list-favorites
       ;;
     update)
-      run_and_show "Oppdater programmet" bash "$HERE/update.sh"
-      ;;
-    choose_srm)
-      if have kdialog; then
-        picked="$(kdialog --title "Velg Steam ROM Manager" --getopenfilename "${HOME}" "*.AppImage|AppImage-filer" || true)"
-      elif have zenity; then
-        picked="$(zenity --title="Velg Steam ROM Manager AppImage" --file-selection --filename="${HOME}/" || true)"
-      else
-        picked=""
-      fi
-      if [[ -n "${picked:-}" ]]; then
-        run_and_show "SRM AppImage lagret" "$APP" set-srm-path "$picked"
-      fi
-      ;;
-    import)
-      run_and_show "Steam-import nå" "$APP" steam-import-now
-      ;;
-    report)
-      run_and_show "Feilsøkingsrapport" "$APP" compatibility-report
+      run_and_show "Oppdater program" bash "$HERE/update.sh"
       ;;
     quit|"")
       exit 0

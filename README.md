@@ -1,12 +1,14 @@
-# EmuDeck Favorites Sync 0.6.20
+# EmuDeck Favorites Sync 0.7.0
 
 Et lite Steam Deck-program som syncer ES-DE-favoritter til Steam.
 
-Programmet gjør tre ting:
+Når du trykker `Oppdater ES-DE favoritter` i kontrollpanelet, gjør programmet tre ting:
 
 1. Leser favoritter fra ES-DE `gamelist.xml`.
 2. Lager/oppdaterer egne SRM Manual-parsere med navn som `ES-DE Favorites Sync - ...`.
-3. Når Steam er lukket, kjører det Steam ROM Manager `remove` og deretter `add` automatisk for våre parsere.
+3. Hvis Steam er lukket, kjører det Steam ROM Manager `remove` og deretter `add` for våre parsere.
+
+Programmet oppdaterer ikke Steam i bakgrunnen på egen hånd. Du må trykke `Oppdater ES-DE favoritter` selv hver gang du har endret favoritter i ES-DE.
 
 Hvis EmuDeck er installert på SD-kort, leter programmet også etter SRM direkte under for eksempel:
 
@@ -50,7 +52,7 @@ Du kan også åpne desktop-filen direkte fra mappen over i Dolphin.
 Når det kommer nye endringer på GitHub, kan du oppdatere fra kontrollpanelet:
 
 ```text
-Oppdater programmet fra GitHub
+Oppdater program
 ```
 
 Eller fra terminal:
@@ -77,62 +79,48 @@ Etter installering ligger kontrollpanelet også her:
 
 Åpne `EmuDeck Favorites Sync.desktop`.
 
-Der får du en enkel meny:
+Der får du en enkel meny med bare tre valg:
 
-- Skru på automatisk sync
-- Skru av automatisk sync
-- Status og favoritter
-- Oppdater Steam nå
-- Oppdater programmet fra GitHub
-- Velg SRM AppImage
-- Importer stagede favoritter til Steam nå
-- Lag feilsøkingsrapport
+- **Oppdater ES-DE favoritter** — leser gjeldende favoritter fra ES-DE og synkroniserer dem til Steam via SRM, hvis Steam er lukket.
+- **Se ES-DE Favoritter** — viser en ren liste over hvilke spill som er favorittmerket akkurat nå. Endrer ingenting.
+- **Oppdater program** — henter siste versjon fra GitHub.
 
 Vanlig bruk er bare:
 
-1. Skru på automatisk sync.
-2. Favorittmarker spill i ES-DE.
-3. Lukk Steam helt.
-4. Programmet syncer og kjører SRM når det får mulighet.
-5. Start Steam igjen.
+1. Favorittmarker eller fjern favoritt på spill i ES-DE.
+2. Lukk Steam helt.
+3. Åpne kontrollpanelet og trykk `Oppdater ES-DE favoritter`.
+4. Start Steam igjen.
 
-## Hvordan autosync fungerer
+Programmet kjører ikke i bakgrunnen og oppdager ikke endringer av seg selv — alt skjer når du trykker `Oppdater ES-DE favoritter`.
 
-- Fra 0.6.11 skal autosync ikke sjekke hele tiden.
-- Den riktige triggeren er at ES-DE lukkes. Da kjøres `esde-closed`, favoritter leses én gang, og endringen lagres som pending hvis Steam fortsatt kjører.
-- En liten startup-service kan behandle pending ved neste trygge oppstart, men det finnes ingen gjentakende timer i denne modellen.
+## Hvordan "Oppdater ES-DE favoritter" fungerer
+
+- Trykk på knappen leser ES-DE sine gamelists på nytt hver gang, uansett om noe har endret seg siden sist.
+- Hvis Steam kjører, blokkeres synkroniseringen og du får beskjed om å lukke Steam og prøve igjen.
 - Når Steam er lukket, kjører programmet først SRM `remove` på eksisterende favorittsync-parsere.
 - Deretter fjerner programmet gamle Steam-shortcuts som ikke lenger finnes i ES-DE favorites.
 - Til slutt skriver programmet ny SRM-staging og kjører SRM `add` på dagens favoritter.
-- Før programmet sier “ingen endring”, sjekker det også om Steam-biblioteket faktisk mangler ønskede favoritter eller har gamle favoritter liggende.
-- `Oppdater Steam nå` tvinger alltid en full kontrollrunde, selv om ES-DE-favorittlisten ikke har endret seg siden sist.
-- Fjerning matcher SRM-shortcuts mer tolerant, slik at små forskjeller i anførselstegn og `LaunchOptions` ikke hindrer cleanup.
-- Ved oppgradering restarter installasjonen autosync-servicen hvis den allerede kjører, slik at bakgrunnen bruker ny kode.
-- Status viser nå også når autosync sist sjekket og om Steam sist ble sett som running eller stopped.
-- Mens SRM `add` kjøres, aktiveres bare `ES-DE Favorites Sync`-parserne midlertidig.
-- Andre SRM-parsere settes tilbake slik de var etterpå.
+- Fjerning matcher SRM-shortcuts tolerant, slik at små forskjeller i anførselstegn og `LaunchOptions` ikke hindrer cleanup.
+- Mens SRM `add` kjøres, aktiveres bare `ES-DE Favorites Sync`-parserne midlertidig; andre SRM-parsere settes tilbake slik de var etterpå.
 - Spillene legges både i en samlet `ES-DE Favorites`-collection og i konsollens vanlige SRM-collection.
 - Favorittsync-parserne blir liggende i SRM selv om en konsoll akkurat nå har null favoritter; manifestet blir bare tomt.
 
 ## Hvis programmet ikke finner Steam ROM Manager
 
-Åpne kontrollpanelet og velg:
+Fra terminal:
 
-```text
-Velg SRM AppImage
+```bash
+~/.local/bin/emudeck-favorites-sync set-srm-path "/path/to/Steam-ROM-Manager.AppImage"
 ```
 
-Pek på Steam ROM Manager sin `.AppImage`-fil. Programmet husker valget under:
+Programmet husker valget under:
 
 ```text
 ~/.local/state/emudeck-favorites-sync/srm-app-path.txt
 ```
 
-Deretter kan du prøve:
-
-```text
-Kjør SRM add nå
-```
+Deretter kan du prøve `Oppdater ES-DE favoritter` igjen.
 
 ## Sikkerhet
 
@@ -145,17 +133,24 @@ Kjør SRM add nå
 
 ## Terminalkommandoer hvis du trenger dem
 
+De to vanligste, som tilsvarer de to første knappene i kontrollpanelet:
+
 ```bash
-~/.local/bin/emudeck-favorites-sync autosync-on
+~/.local/bin/emudeck-favorites-sync list-favorites
+~/.local/bin/emudeck-favorites-sync autosync-now --summary
+```
+
+Øvrige kommandoer, for feilsøking eller avansert bruk:
+
+```bash
 ~/.local/bin/emudeck-favorites-sync autosync-status
-~/.local/bin/emudeck-favorites-sync autosync-off
-~/.local/bin/emudeck-favorites-sync autosync-now
-~/.local/bin/emudeck-favorites-sync esde-closed
 ~/.local/bin/emudeck-favorites-sync srm-remove-now
 ~/.local/bin/emudeck-favorites-sync srm-add-now
 ~/.local/bin/emudeck-favorites-sync set-srm-path "/path/to/Steam-ROM-Manager.AppImage"
 ~/.local/bin/emudeck-favorites-sync steam-import-now
 ```
+
+Programmet installeres uten bakgrunnstjeneste. `autosync-on`/`autosync-off` finnes fortsatt i CLI-en for den som selv vil eksperimentere med en bakgrunnstjeneste som oppdager endringer og kjører `esde-closed` automatisk, men dette er ikke standardoppsettet og vises ikke i kontrollpanelet.
 
 ## Feilsøking
 
