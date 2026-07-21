@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.5 — 2026-07-21
+
+- `Oppdater ES-DE favoritter` gjør ikke lenger en full SRM remove+add-runde hver gang du trykker den. Hvis favorittene dine er uendret siden forrige vellykkede synkronisering, og Steam-biblioteket faktisk stemmer overens med det (ingen manglende eller foreldede snarveier), rapporterer knappen bare at alt allerede er synkronisert uten å røre Steam/SRM i det hele tatt.
+- Så snart noe faktisk er ute av synk (favoritter lagt til/fjernet, eller en Steam-snarvei mangler/er foreldet, f.eks. etter manuell rot i Steam), kjøres den fulle ombyggingen akkurat som før — dette er fortsatt selvhelbredende, ikke ekte per-spill-diffing.
+- Bakgrunnen: knappen kalte alltid `autosync_once(..., force=True)`, som tidligere tvang gjennom full SRM remove+add uansett om noe var endret. Nå gjenbruker den forserte kjøringen samme Steam-biblioteksjekk som den ikke-forserte bakgrunnsflyten alltid har brukt, i stedet for å hoppe over den.
+
 ## 0.7.4 — 2026-07-18
 
 - Ny kommando `set-parser-preference <system> <navn>` som lar deg tvinge frem hvilken SRM-parser som skal brukes for et system når flere konkurrerer likt (for eksempel flere Switch-emulatorer). Bekreftet i praksis: uten dette valgte programmet alltid den samme (feil) parseren igjen, selv etter Reset, siden konflikten ligger i EmuDeck/SRM sine egne parsere og ikke i noe Reset eier.

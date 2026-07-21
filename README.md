@@ -1,4 +1,4 @@
-# EmuDeck Favorites Sync 0.7.4
+# EmuDeck Favorites Sync 0.7.5
 
 Et lite Steam Deck-program som syncer ES-DE-favoritter til Steam.
 
@@ -99,12 +99,14 @@ Programmet kjører ikke i bakgrunnen og oppdager ikke endringer av seg selv — 
 ## Hvordan "Oppdater ES-DE favoritter" fungerer
 
 - Trykk på knappen leser ES-DE sine gamelists på nytt hver gang, uansett om noe har endret seg siden sist.
-- Hvis Steam kjører, blokkeres synkroniseringen og du får beskjed om å lukke Steam og prøve igjen.
-- Når Steam er lukket, kjører programmet først SRM `remove` på eksisterende favorittsync-parsere.
-- Deretter fjerner programmet gamle Steam-shortcuts som ikke lenger finnes i ES-DE favorites.
-- Til slutt skriver programmet ny SRM-staging og kjører SRM `add` på dagens favoritter.
-- Fjerning matcher SRM-shortcuts tolerant, slik at små forskjeller i anførselstegn og `LaunchOptions` ikke hindrer cleanup.
-- Mens SRM `add` kjøres, aktiveres bare `ES-DE Favorites Sync`-parserne midlertidig; andre SRM-parsere settes tilbake slik de var etterpå.
+- Hvis favorittene dine er uendret siden forrige vellykkede synkronisering, og Steam-biblioteket fortsatt stemmer overens med det, gjør knappen ingenting mer enn å bekrefte at alt allerede er synkronisert. Steam/SRM blir ikke rørt i det hele tatt.
+- Hvis noe faktisk har endret seg (favoritter lagt til/fjernet, eller Steam-biblioteket har kommet ut av synk, for eksempel fordi en snarvei ble fjernet manuelt), gjør programmet en full ombygging:
+  - Hvis Steam kjører, blokkeres synkroniseringen og du får beskjed om å lukke Steam og prøve igjen.
+  - Når Steam er lukket, kjører programmet først SRM `remove` på eksisterende favorittsync-parsere.
+  - Deretter fjerner programmet gamle Steam-shortcuts som ikke lenger finnes i ES-DE favorites.
+  - Til slutt skriver programmet ny SRM-staging og kjører SRM `add` på dagens favoritter.
+  - Fjerning matcher SRM-shortcuts tolerant, slik at små forskjeller i anførselstegn og `LaunchOptions` ikke hindrer cleanup.
+  - Mens SRM `add` kjøres, aktiveres bare `ES-DE Favorites Sync`-parserne midlertidig; andre SRM-parsere settes tilbake slik de var etterpå.
 - Spillene legges både i en samlet `ES-DE Favorites`-collection og i konsollens vanlige SRM-collection.
 - Favorittsync-parserne blir liggende i SRM selv om en konsoll akkurat nå har null favoritter; manifestet blir bare tomt.
 

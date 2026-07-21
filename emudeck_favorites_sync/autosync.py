@@ -274,23 +274,22 @@ def autosync_once(config: AppConfig, *, force: bool = False) -> dict[str, Any]:
     signature = favorite_signature(manifest)
     changed = signature != state.get("last_signature", "")
     if changed or force:
-        state["pending"] = True
-        if changed:
-            state["last_change_detected_at"] = utc_now()
-        state["last_signature"] = signature
         state["favorites"] = favorite_summary(manifest)
         save_manifest_atomic(config.state_dir / "desired.json", manifest)
-        if changed:
-            log_autosync(config, f"favorites changed; {len(manifest.entries)} valid favorites")
-        else:
-            log_autosync(config, f"manual update requested; forcing SRM reconciliation for {len(manifest.entries)} favorites")
+    if changed:
+        state["pending"] = True
+        state["last_change_detected_at"] = utc_now()
+        state["last_signature"] = signature
+        log_autosync(config, f"favorites changed; {len(manifest.entries)} valid favorites")
+    elif force:
+        log_autosync(config, f"manual update requested; checking Steam against {len(manifest.entries)} favorites")
 
     report = collect_compatibility(config)
     steam_running = report["steam"]["running"] is True
     state["last_check_at"] = utc_now()
     state["last_steam_running"] = steam_running
     steam_status = None
-    if not state.get("pending") and not force and not steam_running:
+    if not state.get("pending") and not steam_running:
         current_srm_entries = manual_entries(config)
         previous_srm_entries = load_last_srm_entries(config) or current_srm_entries
         steam_status = steam_library_status(
@@ -308,13 +307,18 @@ def autosync_once(config: AppConfig, *, force: bool = False) -> dict[str, Any]:
                 f"{len(steam_status.missing)} missing, {len(steam_status.stale)} stale shortcuts",
             )
     if not state.get("pending"):
-        state["last_result"] = "no-change"
+        state["last_result"] = "already-in-sync" if force else "no-change"
         save_autosync_state(config, state)
+        if force:
+            log_autosync(
+                config,
+                f"already in sync; skipped Steam ROM Manager remove/add for {len(manifest.entries)} favorites",
+            )
         return {
             "changed": changed,
             "forced": force,
-            "synced": False,
-            "reason": "no pending changes",
+            "synced": force,
+            "reason": "already in sync" if force else "no pending changes",
             "steam_library": steam_status.to_dict() if steam_status else None,
             "state": state,
         }

@@ -655,7 +655,7 @@ class ScannerTests(unittest.TestCase):
         self.assertFalse(synced["state"]["srm_remove_pending"])
         self.assertEqual(synced["state"]["last_result"], "synced-and-srm-added")
 
-    def test_forced_autosync_reconciles_even_without_favorite_change(self) -> None:
+    def test_forced_autosync_skips_srm_when_already_in_sync(self) -> None:
         self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
         self.add_srm_gba_parser()
         config = self.fx.config()
@@ -680,7 +680,34 @@ class ScannerTests(unittest.TestCase):
         self.assertTrue(forced["forced"])
         self.assertFalse(forced["changed"])
         self.assertTrue(forced["synced"])
+        self.assertEqual(forced["reason"], "already in sync")
         self.assertFalse(forced["state"]["pending"])
+        self.assertEqual(forced["state"]["last_result"], "already-in-sync")
+        add_mock.assert_not_called()
+
+    def test_forced_autosync_still_reconciles_when_steam_is_out_of_sync(self) -> None:
+        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
+        self.add_srm_gba_parser()
+        self.fx.add_steam_user()
+        config = self.fx.config()
+        manifest = scan(config)
+        stage_apply(config, manifest, dry_run=False, steam_running=False)
+        save_autosync_state(
+            config,
+            {
+                "enabled": False,
+                "pending": False,
+                "last_signature": favorite_signature(manifest),
+                "favorites": [],
+            },
+        )
+        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": False}}), \
+                patch("emudeck_favorites_sync.autosync.run_srm_remove_owned", return_value=SrmCliResult(ok=True, attempted=True)), \
+                patch("emudeck_favorites_sync.autosync.run_srm_add_owned", return_value=SrmCliResult(ok=True, attempted=True)) as add_mock:
+            forced = autosync_once(config, force=True)
+        self.assertFalse(forced["changed"])
+        self.assertTrue(forced["synced"])
+        self.assertEqual(forced["steam_library"]["needs_reconcile"], True)
         add_mock.assert_called_once()
 
     def test_esde_closed_marks_last_esde_close_and_runs_one_check(self) -> None:
