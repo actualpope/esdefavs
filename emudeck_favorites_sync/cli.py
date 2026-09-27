@@ -31,7 +31,7 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("gui", help="Åpne programvinduet (standard)")
     sub.add_parser("status", help="Vis rom-mappe, SRM og spill")
-    for name, text in (("update", "Lagre endringene (samme som «Oppdater»)"), ("fix", "Samme som «Fiks»")):
+    for name, text in (("update", "Lagre endringene (samme som «Lagre»)"), ("fix", "Samme som «Fiks»")):
         command = sub.add_parser(name, help=text)
         command.add_argument("--no-steam", action="store_true", help="Ikke lukk/start Steam (Steam må være lukket)")
     sub.add_parser("report", help="Lagre en feilsøkingsrapport")

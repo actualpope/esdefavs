@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "emudeck-favorites-sync"
-version = "1.1.0"
+version = "1.2.0"
 description = "Add games from the EmuDeck ROM folder to Steam through Steam ROM Manager"
 requires-python = ">=3.10"
 license = {text = "MIT"}

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0 — 2026-09-27
+
+- «Oppdater»-knappen heter nå **Lagre**, og er grå til du har flyttet spill.
+- Ny knapp **Tilbakestill** som angrer alle flyttinger som ikke er lagret ennå.
+- Retter «ingen SRM-parser» for konsoller som allerede har spill i Steam (f.eks. GameCube): EmuDeck-parsere som peker på hele rom-mappa og velger konsoll i søkemønsteret (`${/}gc${/}…`) gjenkjennes nå.
+- Finnes det likevel ingen passende parser, får nye spill samme emulator og oppsett som spillene som allerede ligger i den konsollen. SRM-oppsett viser dette.
+
 ## 1.1.0 — 2026-09-27
 
 - Nytt mørkt utseende: sort bakgrunn, paneler med tynne rammer, én indigo aksentfarge og dempede statusfarger (grønn = ny, rød = fjernes, gul = rom mangler).

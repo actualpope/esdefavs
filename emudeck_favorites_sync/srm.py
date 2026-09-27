@@ -266,18 +266,16 @@ def _parser_inputs_text(parser: dict[str, Any]) -> str:
 
 
 def _parser_mentions_system(parser: dict[str, Any], system: str) -> bool:
-    text = _parser_inputs_text(parser)
-    return (
-        f"{system}/" in text
-        or f"{system}" in text.split()
-        or f"{{{system}" in text
-        or f",{system}" in text
-    )
+    # Globs look like "gc/**/${title}@(...)", "${/}gc${/}**${/}..." or "@(gc|wii)/...".
+    text = _parser_inputs_text(parser).replace("${/}", "/")
+    return system.casefold() in set(re.split(r"[^a-z0-9_+\-]+", text))
 
 
-def _rom_directory_is_global_root(raw: str) -> bool:
+def _rom_directory_is_global_root(raw: str, roms_dir: Path | None = None) -> bool:
     text = raw.replace("\\", "/").rstrip("/")
-    return text in {"${romsdirglobal}", "${romsdirglobal}${/}"}
+    if roms_dir is not None and text == str(roms_dir).replace("\\", "/").rstrip("/"):
+        return True
+    return text.casefold() in {"${romsdirglobal}", "${romsdirglobal}${/}"}
 
 
 def parser_score(parser: dict[str, Any], system: str, roms_dir: Path | None) -> int:
@@ -285,8 +283,8 @@ def parser_score(parser: dict[str, Any], system: str, roms_dir: Path | None) -> 
     rom_directory = str(parser.get("romDirectory", ""))
     if _rom_directory_matches(rom_directory, system, roms_dir):
         score += 100
-    elif _rom_directory_is_global_root(rom_directory) and _parser_mentions_system(parser, system):
-        score += 80
+    elif _rom_directory_is_global_root(rom_directory, roms_dir) and _parser_mentions_system(parser, system):
+        score += 100
     categories = parser.get("steamCategories") if isinstance(parser.get("steamCategories"), list) else []
     aliases = SYSTEM_ALIASES.get(system, (system,))
     category_text = " ".join(str(item).casefold() for item in categories)

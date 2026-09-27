@@ -173,6 +173,51 @@ def migrate(config: AppConfig, library: Library | None) -> list[GameRecord]:
     return records
 
 
+# ------------------------------------------------ launch settings from a sibling
+
+
+def _escaped(path: str) -> str:
+    return path.replace('"', '\\"')
+
+
+def entry_template(records: list[GameRecord], games_by_id: dict[str, RomGame], system: str) -> tuple[dict[str, Any], str] | None:
+    """A game already in Steam for this console whose launch command contains its ROM path.
+
+    Used when no SRM parser matches the console: a new game then gets the same
+    emulator and arguments, with only the ROM path swapped.
+    """
+    for record in records:
+        if record.system != system or not record.in_steam or not record.entry or not record.rel_path:
+            continue
+        game = games_by_id.get(record.id)
+        if game and _escaped(game.launch_path) in str(record.entry.get("launchOptions") or ""):
+            return record.entry, game.launch_path
+    return None
+
+
+def entry_from_template(template: tuple[dict[str, Any], str], title: str, launch_path: str) -> dict[str, Any]:
+    entry, old_path = template
+    result = dict(entry)
+    result["title"] = title
+    result["launchOptions"] = str(entry.get("launchOptions") or "").replace(_escaped(old_path), _escaped(launch_path))
+    return result
+
+
+def pending_changes(records: list[GameRecord]) -> tuple[int, int]:
+    return (
+        sum(1 for r in records if r.status == PENDING_ADD),
+        sum(1 for r in records if r.status == PENDING_REMOVE),
+    )
+
+
+def discard_changes(records: list[GameRecord]) -> None:
+    """Undo every move that has not been saved yet."""
+    records[:] = [r for r in records if r.status != PENDING_ADD]
+    for record in records:
+        if record.status == PENDING_REMOVE:
+            record.status = APPLIED
+
+
 # ------------------------------------------------------------ moving games
 
 

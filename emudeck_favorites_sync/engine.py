@@ -1,4 +1,4 @@
-"""«Oppdater» and «Fiks»: bring Steam in line with our game list through SRM.
+"""«Lagre» and «Fiks»: bring Steam in line with our game list through SRM.
 
 How SRM behaves (checked against its source), and what that means here:
 
@@ -12,7 +12,7 @@ How SRM behaves (checked against its source), and what that means here:
 * SRM identifies a shortcut by its Exe + current name. A game renamed in Steam is
   therefore not recognised and gets re-added. We snapshot shortcuts.vdf before
   the run and afterwards merge such duplicates back and restore names (and, for
-  «Oppdater», any launch options changed by hand).
+  «Lagre», any launch options changed by hand).
 """
 
 from __future__ import annotations
@@ -23,10 +23,20 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .config import AppConfig
-from .games import APPLIED, PENDING_ADD, PENDING_REMOVE, GameRecord, load_games, save_games
+from .games import (
+    APPLIED,
+    PENDING_ADD,
+    PENDING_REMOVE,
+    GameRecord,
+    entry_from_template,
+    entry_template,
+    load_games,
+    save_games,
+)
 from .library import Library, scan_library
 from .srm import (
     FAVORITES_COLLECTION,
+    M3U_UNSUPPORTED_SYSTEMS,
     SrmError,
     build_entry,
     load_parser_preferences,
@@ -148,6 +158,7 @@ def _plan(config: AppConfig, mode: str, records: list[GameRecord], library: Libr
         source = select_parser_candidate(
             parser_candidates(srm.dict_parsers, system, config.roms_dir), preferences.get(system)
         )
+        template = entry_template(records, games, system) if source is None else None
         desired: list[tuple[GameRecord, dict[str, Any]]] = []
         for record in (r for r in records if r.system == system):
             if record.status == PENDING_REMOVE and mode == UPDATE:
@@ -169,6 +180,10 @@ def _plan(config: AppConfig, mode: str, records: list[GameRecord], library: Libr
                     result = build_entry(record.title, game.launch_path, system, source, environment)
                     if result.entry is not None:
                         entry = result.entry
+                    elif source is None and template is not None and record.status == PENDING_ADD and not (
+                        system in M3U_UNSUPPORTED_SYSTEMS and game.launch_path.casefold().endswith(".m3u")
+                    ):
+                        entry = entry_from_template(template, record.title, game.launch_path)
                     elif record.status == PENDING_ADD:
                         plan.add_failed.append((record, result.problem))
                         continue

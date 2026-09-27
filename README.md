@@ -1,4 +1,4 @@
-# EmuDeck Favorites Sync 1.1
+# EmuDeck Favorites Sync 1.2
 
 Et lite Steam Deck-program for å legge spill fra EmuDeck-rom-mappa inn i Steam via Steam ROM Manager (SRM). Det brukes ikke lenger ES-DE-favoritter; alt velges i programvinduet.
 
@@ -6,12 +6,13 @@ Et lite Steam Deck-program for å legge spill fra EmuDeck-rom-mappa inn i Steam 
 
 - **ROMS** (venstre): alle spill i rom-mappa, med konsoll (mappenavnet) og filnavn, sortert etter konsoll og så alfabetisk. Knappen **Velg rom-mappe …** bytter mappe.
 - **SRM** (høyre): spillene som ligger i Steam via våre egne SRM-parsere (`ES-DE Favorites Sync - …`, én per konsoll). Knappen **SRM-oppsett …** viser om SRM er riktig koblet, og hvilken emulator hver konsoll bruker.
-- **→ / ←**: flytter valgte spill mellom listene (også dobbeltklikk). Ingen filer flyttes; det er bare et valg. Endringer vises som «ny» (grønn) eller «fjernes» (rød) til du trykker Oppdater.
-- **Oppdater**: lukker Steam, kjører SRM for konsollene som er endret, sier hvor mange spill som ble lagt til, og starter Steam igjen.
+- **→ / ←**: flytter valgte spill mellom listene (også dobbeltklikk). Ingen filer flyttes; det er bare et valg. Endringer vises som «ny» (grønn) eller «fjernes» (rød) til du trykker Lagre.
+- **Lagre** (grå til du har gjort endringer): lukker Steam, kjører SRM for konsollene som er endret, sier hvor mange spill som ble lagt til, og starter Steam igjen.
+- **Tilbakestill**: angrer alle flyttinger som ikke er lagret ennå.
 - **Fiks**: oppdaterer startinnstillingene (emulator og argumenter) for alle spill i SRM-lista etter dagens oppsett. Legger ikke til og fjerner ikke spill. Navn du har endret i Steam beholdes.
 - **Oppdater program**: henter siste versjon fra GitHub.
 
-Kjør programmet i Desktop Mode. Steam lukkes mens Oppdater/Fiks pågår.
+Kjør programmet i Desktop Mode. Steam lukkes mens Lagre/Fiks pågår.
 
 ## Viktig å vite
 
@@ -42,7 +43,7 @@ Vinduet er det vanlige. For feilsøking finnes også:
 ```bash
 ~/.local/bin/emudeck-favorites-sync status   # rom-mappe, SRM og spill
 ~/.local/bin/emudeck-favorites-sync report   # lagrer en feilsøkingsrapport
-~/.local/bin/emudeck-favorites-sync update   # samme som Oppdater
+~/.local/bin/emudeck-favorites-sync update   # samme som Lagre
 ~/.local/bin/emudeck-favorites-sync fix      # samme som Fiks
 ```
 

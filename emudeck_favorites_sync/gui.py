@@ -15,7 +15,20 @@ from typing import Callable
 from . import __version__, theme
 from .config import AppConfig, discover_config, set_roms_dir
 from .engine import FIX, UPDATE, RunReport, run, save_report
-from .games import APPLIED, PENDING_ADD, PENDING_REMOVE, GameRecord, load_games, move_out_of_srm, move_to_srm, save_games, undo_remove
+from .games import (
+    APPLIED,
+    PENDING_ADD,
+    PENDING_REMOVE,
+    GameRecord,
+    discard_changes,
+    entry_template,
+    load_games,
+    move_out_of_srm,
+    move_to_srm,
+    pending_changes,
+    save_games,
+    undo_remove,
+)
 from .library import Library, RomGame, scan_library
 from .srm import (
     SrmData,
@@ -105,10 +118,12 @@ class App:
         self.status_dot = tk.Canvas(footer, width=10, height=10, bg=theme.BG, highlightthickness=0, bd=0)
         self.status_dot.pack(side="left", padx=(2, 10))
         ttk.Label(footer, textvariable=self.status, style="Status.TLabel").pack(side="left")
-        self.update_button = ttk.Button(footer, text="Oppdater", style="Accent.TButton", command=self.start_update)
+        self.update_button = ttk.Button(footer, text="Lagre", style="Accent.TButton", command=self.start_update)
         self.update_button.pack(side="right")
+        self.reset_button = ttk.Button(footer, text="Tilbakestill", style="Secondary.TButton", command=self.discard)
+        self.reset_button.pack(side="right", padx=(0, 10))
         self.fix_button = ttk.Button(footer, text="Fiks", style="Secondary.TButton", command=self.start_fix)
-        self.fix_button.pack(side="right", padx=(0, 10))
+        self.fix_button.pack(side="right", padx=(0, 28))
         self.progress = ttk.Progressbar(footer, mode="indeterminate", length=160, style="Accent.Horizontal.TProgressbar")
 
     def _panel(self, parent: ttk.Frame, column: int, title: str, count: tk.StringVar,
@@ -216,13 +231,13 @@ class App:
             self.srm_info.set("Fant ikke SRM-oppsettet. Åpne «SRM-oppsett».")
         else:
             self.srm_info.set(f"{in_steam} spill i Steam via Steam ROM Manager")
-        adds = sum(1 for r in self.records if r.status == PENDING_ADD)
-        removes = len(removing)
         if not self.busy:
+            adds, removes = pending_changes(self.records)
             if adds or removes:
-                self._set_status(f"Ikke lagret: {adds} legges til, {removes} fjernes. Trykk «Oppdater».", theme.WARNING)
+                self._set_status(f"Ikke lagret: {adds} legges til, {removes} fjernes. Trykk «Lagre».", theme.WARNING)
             else:
                 self._set_status("Alt er lagret.", theme.SUCCESS)
+            self._update_buttons()
 
     def _set_status(self, text: str, color: str) -> None:
         self.status.set(text)
@@ -251,7 +266,7 @@ class App:
         preferences = load_parser_preferences(self.config)
         if select_parser_candidate(
             parser_candidates(self.srm.dict_parsers, game.system, self.config.roms_dir), preferences.get(game.system)
-        ) is None:
+        ) is None and entry_template(self.records, self.library.by_id(), game.system) is None:
             return f"ingen SRM-parser for «{game.system}»"
         return ""
 
@@ -290,7 +305,8 @@ class App:
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
         state = "disabled" if busy else "normal"
-        for button in (self.update_button, self.fix_button, self.program_button, self.right_button, self.left_button):
+        for button in (self.update_button, self.reset_button, self.fix_button, self.program_button,
+                       self.right_button, self.left_button):
             button.configure(state=state)
         self.root.configure(cursor="watch" if busy else "")
         if busy:
@@ -299,6 +315,21 @@ class App:
         else:
             self.progress.stop()
             self.progress.pack_forget()
+            self._update_buttons()
+
+    def _update_buttons(self) -> None:
+        """«Lagre» and «Tilbakestill» are only active when there is something unsaved."""
+        if self.busy:
+            return
+        state = "normal" if any(pending_changes(self.records)) else "disabled"
+        self.update_button.configure(state=state)
+        self.reset_button.configure(state=state)
+
+    def discard(self) -> None:
+        if self.busy or not any(pending_changes(self.records)):
+            return
+        discard_changes(self.records)
+        self._save_and_refresh()
 
     def _poll_events(self) -> None:
         try:
@@ -328,15 +359,13 @@ class App:
         self.events.put(lambda: self._set_status(text, theme.ACCENT))
 
     def start_update(self) -> None:
-        adds = sum(1 for r in self.records if r.status == PENDING_ADD)
-        removes = sum(1 for r in self.records if r.status == PENDING_REMOVE)
+        adds, removes = pending_changes(self.records)
         if not adds and not removes:
-            theme.info(self.root, "Ingen endringer", "Flytt spill mellom listene først, og trykk så «Oppdater».")
             return
         text = f"{adds} spill legges til og {removes} fjernes.\n\nSteam lukkes mens dette pågår, og startes igjen etterpå."
         if removes:
             text += "\n\nSpill som fjernes forsvinner fra Steam, sammen med spilletid og bilder der."
-        if theme.confirm(self.root, "Oppdater Steam", text, ok_text="Oppdater"):
+        if theme.confirm(self.root, "Lagre endringer", text, ok_text="Lagre"):
             self._run_engine(UPDATE)
 
     def start_fix(self) -> None:
@@ -514,13 +543,22 @@ class SrmSetup(tk.Toplevel):
             {game.system for game in self.app.library.games} | {r.system for r in self.app.records},
             key=str.casefold,
         )
+        games_by_id = self.app.library.by_id()
+        templates = {system: entry_template(self.app.records, games_by_id, system) for system in systems}
         for index, info in enumerate(describe_systems(config, srm, systems), start=1):
+            template = templates.get(info.system)
+            if not info.candidates and template is not None:
+                info.problem = ""
+                info.target = str(template[0].get("target") or "")
             ttk.Label(grid, text=info.system.upper(), style="Card.TLabel").grid(row=index, column=0, sticky="w", padx=(0, 22), pady=4)
             if info.candidates:
                 value = tk.StringVar(value=info.chosen)
                 box = ttk.Combobox(grid, textvariable=value, values=info.candidates, state="readonly", width=36)
                 box.grid(row=index, column=1, sticky="w", padx=(0, 22), pady=4)
                 box.bind("<<ComboboxSelected>>", lambda _event, s=info.system, v=value: self.choose_parser(s, v.get()))
+            elif template is not None:
+                ttk.Label(grid, text="som spillene som allerede er lagt til", style="Warn.Card.TLabel").grid(
+                    row=index, column=1, sticky="w", padx=(0, 22))
             else:
                 ttk.Label(grid, text="ingen parser", style="Bad.Card.TLabel").grid(row=index, column=1, sticky="w", padx=(0, 22))
             ttk.Label(grid, text=info.problem or info.target,

@@ -16,9 +16,11 @@ from emudeck_favorites_sync.engine import FIX, UPDATE, run
 from emudeck_favorites_sync.games import (
     APPLIED,
     PENDING_ADD,
+    discard_changes,
     load_games,
     move_out_of_srm,
     move_to_srm,
+    pending_changes,
     save_games,
 )
 from emudeck_favorites_sync.library import logical_id, scan_library
@@ -408,6 +410,57 @@ class UpdateTests(Base):
         backup_dir = Path(report.backup_dir)
         self.assertTrue((backup_dir / "steam/12345/shortcuts.vdf").is_file())
         self.assertTrue((backup_dir / "srm/userConfigurations.json").is_file())
+
+
+class NoParserTests(Base):
+    def setUp(self) -> None:
+        super().setUp()
+        self.env.touch("gc/Old Cube.iso")
+        self.env.touch("gc/New Cube.rvz")
+        parsers = self.env.parsers()
+        parsers.append(glob_parser("gc", "Nintendo GameCube - Dolphin", "/usr/bin/dolphin-emu",
+                                   '-b -e "${filePath}"', ".iso|.rvz"))
+        self.env.write_parsers(parsers)
+        self.env.old_install({"gc": [("Old Cube", "Old Cube.iso")]})
+        # EmuDeck later changed its parser so we no longer recognise it for "gc".
+        parsers = [p for p in self.env.parsers() if not p["parserId"].startswith("emudeck-gc-")]
+        self.env.write_parsers(parsers)
+
+    def test_new_game_copies_settings_from_existing_game(self) -> None:
+        self.add(("gc", "New Cube.rvz"))
+        report = self.update()
+        self.assertTrue(report.ok, report.summary())
+        self.assertEqual(len(report.added), 1)
+        new = next(s for s in self.env.shortcuts() if field(s, "AppName") == "New Cube")
+        self.assertEqual(field(new, "Exe"), f'"/usr/bin/dolphin-emu" -b -e "{self.env.roms / "gc/New Cube.rvz"}"')
+        self.assertIn("Old Cube", self.env.names())
+
+    def test_global_root_parser_with_folder_in_glob_is_recognised(self) -> None:
+        parsers = self.env.parsers()
+        parser = glob_parser("gc", "Dolphin", "/usr/bin/dolphin-emu", '"${filePath}"', ".iso|.rvz")
+        parser["romDirectory"] = "${romsdirglobal}"
+        parser["parserInputs"] = {"glob": "${/}gc${/}**${/}${title}@(.iso|.rvz)"}
+        parser["steamCategories"] = ["Dolphin"]
+        parsers.append(parser)
+        self.env.write_parsers(parsers)
+        config = self.env.config()
+        from emudeck_favorites_sync.srm import parser_candidates
+
+        candidates = parser_candidates(load_srm(config).dict_parsers, "gc", config.roms_dir)
+        self.assertEqual([p["configTitle"] for p, _ in candidates], ["Dolphin"])
+
+
+class DiscardTests(Base):
+    def test_discard_undoes_unsaved_moves(self) -> None:
+        self.env.old_install({"snes": [("Super Game", "Super Game (USA).sfc")]})
+        self.add(("snes", "Third.sfc"))
+        self.remove(("snes", "Super Game (USA).sfc"))
+        config, library = self.library()
+        records = load_games(config, library)
+        self.assertEqual(pending_changes(records), (1, 1))
+        discard_changes(records)
+        self.assertEqual(pending_changes(records), (0, 0))
+        self.assertEqual([(r.rel_path, r.status) for r in records], [("Super Game (USA).sfc", APPLIED)])
 
 
 class FixTests(Base):
