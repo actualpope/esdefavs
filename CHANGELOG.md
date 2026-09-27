@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0 — 2026-09-27
+
+- Nytt mørkt utseende: sort bakgrunn, paneler med tynne rammer, én indigo aksentfarge og dempede statusfarger (grønn = ny, rød = fjernes, gul = rom mangler).
+- Søkefeltet ligger nå øverst, og «Oppdater program» i toppraden. Oppdater og Fiks ligger nede til høyre.
+- Egen fremdriftsindikator mens SRM jobber, og meldinger og spørsmål vises i samme stil som resten av programmet.
+- SRM-oppsett er delt i oversiktlige kort.
+
 ## 1.0.0 — 2026-09-27
 
 Helt nytt program. ES-DE brukes ikke lenger.

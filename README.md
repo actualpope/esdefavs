@@ -1,4 +1,4 @@
-# EmuDeck Favorites Sync 1.0
+# EmuDeck Favorites Sync 1.1
 
 Et lite Steam Deck-program for å legge spill fra EmuDeck-rom-mappa inn i Steam via Steam ROM Manager (SRM). Det brukes ikke lenger ES-DE-favoritter; alt velges i programvinduet.
 
