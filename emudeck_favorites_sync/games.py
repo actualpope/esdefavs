@@ -218,6 +218,24 @@ def discard_changes(records: list[GameRecord]) -> None:
             record.status = APPLIED
 
 
+def already_in_srm(records: list[GameRecord], game: RomGame) -> bool:
+    """True if an SRM record for this console already launches this exact ROM.
+
+    Normally a game's id (console + relative path) is enough to tell, but this
+    also catches the rare case where a stored record's id no longer matches a
+    freshly scanned game (for example a ROM file renamed after being added): a
+    game already covered by SRM should never also show up as available in ROMS.
+    """
+    normalized = normalize_command(game.launch_path)
+    if not normalized:
+        return False
+    return any(
+        record.system == game.system and record.in_steam and record.entry
+        and normalized in normalize_command(record.entry.get("launchOptions"))
+        for record in records
+    )
+
+
 # ------------------------------------------------------------ moving games
 
 

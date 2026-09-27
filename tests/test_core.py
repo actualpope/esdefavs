@@ -16,6 +16,7 @@ from emudeck_favorites_sync.engine import FIX, UPDATE, run
 from emudeck_favorites_sync.games import (
     APPLIED,
     PENDING_ADD,
+    already_in_srm,
     discard_changes,
     load_games,
     move_out_of_srm,
@@ -23,7 +24,7 @@ from emudeck_favorites_sync.games import (
     pending_changes,
     save_games,
 )
-from emudeck_favorites_sync.library import logical_id, scan_library
+from emudeck_favorites_sync.library import RomGame, logical_id, scan_library
 from emudeck_favorites_sync.srm import (
     OWNED_PARSER_PREFIX,
     build_entry,
@@ -410,6 +411,49 @@ class UpdateTests(Base):
         backup_dir = Path(report.backup_dir)
         self.assertTrue((backup_dir / "steam/12345/shortcuts.vdf").is_file())
         self.assertTrue((backup_dir / "srm/userConfigurations.json").is_file())
+
+
+class FolderGameTests(Base):
+    def setUp(self) -> None:
+        super().setUp()
+        self.env.touch("ps3/God of War 3/PS3_GAME/USRDIR/EBOOT.BIN")
+        self.env.touch("ps3/God of War 3/PS3_DISC.SFB")
+        self.env.touch("ps3/Uncharted 2/PS3_GAME/USRDIR/EBOOT.BIN")
+
+    def test_folder_without_extension_is_one_game(self) -> None:
+        _, library = self.library()
+        found = {(g.system, g.rel_path, g.title) for g in library.games if g.system == "ps3"}
+        self.assertEqual(found, {("ps3", "God of War 3", "God of War 3"), ("ps3", "Uncharted 2", "Uncharted 2")})
+        game = next(g for g in library.games if g.rel_path == "God of War 3")
+        self.assertTrue(game.launch_path.endswith("ps3/God of War 3"))
+
+    def test_folder_game_can_be_added(self) -> None:
+        parsers = self.env.parsers()
+        parsers.append(glob_parser("ps3", "PS3 - RPCS3", "/usr/bin/rpcs3", '--no-gui "${filePath}"', ""))
+        self.env.write_parsers(parsers)
+        self.add(("ps3", "God of War 3"))
+        report = self.update()
+        self.assertTrue(report.ok, report.summary())
+        self.assertIn("God of War 3", self.env.names())
+
+
+class AlreadyInSrmTests(unittest.TestCase):
+    def test_matches_by_launch_path_even_if_id_differs(self) -> None:
+        from emudeck_favorites_sync.games import GameRecord
+
+        game = RomGame(id="fresh-id", system="snes", rel_path="Game (Europe).sfc", title="Game",
+                       launch_path="/roms/snes/Game (Europe).sfc")
+        record = GameRecord(id="stale-id", system="snes", rel_path="Game (E).sfc", title="Game", status=APPLIED,
+                            entry={"title": "Game", "target": "/x", "launchOptions": '"/roms/snes/Game (Europe).sfc"'})
+        self.assertTrue(already_in_srm([record], game))
+
+    def test_no_match_for_different_console_or_path(self) -> None:
+        from emudeck_favorites_sync.games import GameRecord
+
+        game = RomGame(id="g", system="snes", rel_path="Other.sfc", title="Other", launch_path="/roms/snes/Other.sfc")
+        record = GameRecord(id="r", system="snes", rel_path="Game.sfc", title="Game", status=APPLIED,
+                            entry={"title": "Game", "target": "/x", "launchOptions": '"/roms/snes/Game.sfc"'})
+        self.assertFalse(already_in_srm([record], game))
 
 
 class NoParserTests(Base):

@@ -20,6 +20,7 @@ from .games import (
     PENDING_ADD,
     PENDING_REMOVE,
     GameRecord,
+    already_in_srm,
     discard_changes,
     entry_template,
     load_games,
@@ -199,7 +200,7 @@ class App:
 
         left_rows: list[tuple[str, str, str, str, str]] = []
         for game in self.library.games:
-            if game.id in in_srm:
+            if game.id in in_srm or already_in_srm(self.records, game):
                 continue
             status, tag = ("●  fjernes", "remove") if game.id in removing else ("", "")
             left_rows.append((game.id, game.system, game.filename, status, tag))

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.0 — 2026-09-27
+
+- Retter at PS3/Wii U-spill (mapper uten filtype, f.eks. `Game Name/PS3_GAME/USRDIR/EBOOT.BIN`) ikke lenger ble gjenkjent som ett spill. De ble i stedet lest gjennom, og filer inni dukket opp som egne "nye" spill i ROMS mens selve mappe-spillet fortsatt lå i SRM. Slike mapper vises nå igjen som ett spill, akkurat som i den gamle ES-DE-baserte versjonen.
+- Et spill som allerede ligger i SRM-lista skal aldri vises i ROMS-lista i tillegg, uansett hvorfor. ROMS-lista sjekker nå også om et SRM-spill for samme konsoll faktisk starter akkurat den rom-fila, ikke bare om den lagrede spill-IDen stemmer nøyaktig, som en ekstra sikring mot at samme spill vises to steder.
+
 ## 1.2.0 — 2026-09-27
 
 - «Oppdater»-knappen heter nå **Lagre**, og er grå til du har flyttet spill.

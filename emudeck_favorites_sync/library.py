@@ -35,6 +35,12 @@ NON_ROM_EXTENSIONS = {
 PLAYLIST_EXTENSIONS = {".m3u", ".cue", ".gdi"}
 MAX_DEPTH = 4
 
+# EmuDeck systems where a ROM is a whole folder with no file extension in its own
+# name (e.g. "Game Name/PS3_GAME/USRDIR/EBOOT.BIN" or a Wii U title dump). Without
+# this, the folder itself is not recognised as a game and its inner files are
+# scanned individually instead.
+FOLDER_GAME_SYSTEMS = {"ps3", "wiiu"}
+
 
 def logical_id(system: str, rel_path: str) -> str:
     """Same identity rule as earlier versions: console + path inside the console folder."""
@@ -151,7 +157,9 @@ def scan_system(system_root: Path, system: str, allowed: set[str] | None) -> lis
             if is_dir:
                 if child.name.startswith("."):
                     continue
-                if _is_game_name(child.name, allowed) and (
+                if depth == 0 and system in FOLDER_GAME_SYSTEMS:
+                    candidates.append((path, True))
+                elif _is_game_name(child.name, allowed) and (
                     allowed is not None or path.suffix.casefold() == ".m3u"
                 ):
                     candidates.append((path, True))
