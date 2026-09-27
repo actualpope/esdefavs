@@ -2,47 +2,31 @@ from __future__ import annotations
 
 import os
 import re
-import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-from .models import Diagnostic
+from .util import read_json, write_json_atomic
 
 
 @dataclass
 class AppConfig:
     home: Path
-    esde_dir: Path
-    gamelists_dir: Path
-    roms_dir: Path | None
     state_dir: Path
-    diagnostics: list[Diagnostic] = field(default_factory=list)
-    metadata_save_mode: str = "unknown"
+    roms_dir: Path | None
     roms_source: str = "not found"
+
+    @property
+    def srm_user_data(self) -> Path:
+        return self.home / ".config/steam-rom-manager/userData"
+
+    @property
+    def settings_path(self) -> Path:
+        return self.state_dir / "settings.json"
 
 
 def _expand_path(value: str, home: Path) -> Path:
     value = value.replace("%HOME%", str(home)).replace("$HOME", str(home))
     return Path(os.path.expandvars(value)).expanduser()
-
-
-def _read_esde_settings(esde_dir: Path) -> tuple[str, str | None]:
-    settings = esde_dir / "es_settings.xml"
-    if not settings.is_file():
-        return "unknown", None
-    try:
-        root = ET.parse(settings).getroot()
-    except (ET.ParseError, OSError):
-        return "unreadable", None
-    save_mode = "unknown"
-    rom_directory = None
-    for element in root.iter():
-        name = element.attrib.get("name")
-        if name == "SaveGamelistsMode":
-            save_mode = element.attrib.get("value", "unknown")
-        elif name == "ROMDirectory":
-            rom_directory = element.attrib.get("value") or None
-    return save_mode, rom_directory
 
 
 def _read_emudeck_candidates(home: Path) -> list[tuple[Path, str]]:
@@ -75,89 +59,61 @@ def _read_emudeck_candidates(home: Path) -> list[tuple[Path, str]]:
     return candidates
 
 
+def load_settings(state_dir: Path) -> dict:
+    data = read_json(state_dir / "settings.json", {})
+    return data if isinstance(data, dict) else {}
+
+
+def save_setting(config: AppConfig, key: str, value: object) -> None:
+    settings = load_settings(config.state_dir)
+    if value in (None, ""):
+        settings.pop(key, None)
+    else:
+        settings[key] = value
+    write_json_atomic(config.settings_path, settings)
+
+
+def set_roms_dir(config: AppConfig, path: str | Path) -> None:
+    resolved = Path(path).expanduser().resolve()
+    save_setting(config, "roms_dir", str(resolved))
+    config.roms_dir = resolved
+    config.roms_source = "valgt i programmet"
+
+
 def discover_config(
-    esde_override: str | None = None,
     roms_override: str | None = None,
     state_override: str | None = None,
     home_override: str | None = None,
 ) -> AppConfig:
     home = Path(home_override).expanduser() if home_override else Path.home()
-    esde_dir = _expand_path(esde_override, home) if esde_override else home / "ES-DE"
     state_dir = (
         _expand_path(state_override, home)
         if state_override
         else home / ".local/state/emudeck-favorites-sync"
     )
-    diagnostics: list[Diagnostic] = []
-    save_mode, esde_rom_directory = _read_esde_settings(esde_dir)
 
     candidates: list[tuple[Path, str]] = []
     if roms_override:
         candidates.append((_expand_path(roms_override, home), "command line"))
-    elif esde_rom_directory:
-        candidates.append((_expand_path(esde_rom_directory, home), "ES-DE ROMDirectory"))
     else:
+        chosen = load_settings(state_dir).get("roms_dir")
+        if isinstance(chosen, str) and chosen:
+            candidates.append((Path(chosen), "valgt i programmet"))
         candidates.extend(_read_emudeck_candidates(home))
-        candidates.append((home / "Emulation/roms", "EmuDeck internal default"))
-        media_roots = [Path("/run/media/deck"), Path("/run/media")]
-        for media_root in media_roots:
+        candidates.append((home / "Emulation/roms", "EmuDeck standard"))
+        for media_root in (Path("/run/media/deck"), Path("/run/media")):
             if media_root.is_dir():
                 try:
-                    for path in media_root.glob("*/Emulation/roms"):
-                        candidates.append((path, "removable media discovery"))
+                    for path in sorted(media_root.glob("*/Emulation/roms")):
+                        candidates.append((path, "minnekort"))
                 except OSError:
                     pass
 
-    roms_dir = None
-    roms_source = "not found"
     for candidate, source in candidates:
         if candidate.is_dir():
-            roms_dir = candidate.resolve()
-            roms_source = source
-            break
-    if roms_dir is None and candidates:
-        roms_dir = candidates[0]
-        roms_source = candidates[0][1]
-        diagnostics.append(Diagnostic(
-            "error", "ROMS_UNAVAILABLE",
-            f"ROM directory is configured but unavailable: {roms_dir}",
-            path=str(roms_dir),
-        ))
-    elif roms_dir is None:
-        diagnostics.append(Diagnostic(
-            "error", "ROMS_NOT_FOUND",
-            "Could not detect the ROM directory. Use --roms-dir /path/to/Emulation/roms.",
-        ))
-
-    if not esde_dir.is_dir():
-        diagnostics.append(Diagnostic(
-            "error", "ESDE_NOT_FOUND", f"ES-DE directory not found: {esde_dir}", path=str(esde_dir)
-        ))
-    if not (esde_dir / "gamelists").is_dir():
-        diagnostics.append(Diagnostic(
-            "error", "GAMELISTS_NOT_FOUND",
-            f"ES-DE gamelists directory not found: {esde_dir / 'gamelists'}",
-            path=str(esde_dir / "gamelists"),
-        ))
-    if save_mode in {"on exit", "never"}:
-        diagnostics.append(Diagnostic(
-            "warning", "DELAYED_METADATA",
-            f"ES-DE SaveGamelistsMode is '{save_mode}'; favorites may not be visible on disk immediately.",
-            path=str(esde_dir / "es_settings.xml"),
-        ))
-    elif save_mode == "unreadable":
-        diagnostics.append(Diagnostic(
-            "warning", "SETTINGS_UNREADABLE", "Could not parse ES-DE es_settings.xml."
-        ))
-
-    return AppConfig(
-        home=home,
-        esde_dir=esde_dir,
-        gamelists_dir=esde_dir / "gamelists",
-        roms_dir=roms_dir,
-        state_dir=state_dir,
-        diagnostics=diagnostics,
-        metadata_save_mode=save_mode,
-        roms_source=roms_source,
-    )
-
+            return AppConfig(home=home, state_dir=state_dir, roms_dir=candidate.resolve(), roms_source=source)
+    if candidates and candidates[0][1] in {"command line", "valgt i programmet"}:
+        # Keep an explicitly chosen folder even if it is unavailable right now
+        # (for example an unmounted SD card), so the GUI can say so.
+        return AppConfig(home=home, state_dir=state_dir, roms_dir=candidates[0][0], roms_source=candidates[0][1])
+    return AppConfig(home=home, state_dir=state_dir, roms_dir=None)

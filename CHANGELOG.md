@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.0 — 2026-09-27
+
+Helt nytt program. ES-DE brukes ikke lenger.
+
+- Nytt vindu med to lister: **ROMS** (alle spill i rom-mappa, med konsoll og filnavn) og **SRM** (spillene i våre SRM-parsere). Spill flyttes mellom listene med → og ←.
+- **Oppdater** lukker Steam, kjører SRM bare for konsollene som er endret, sier hvor mange spill som ble lagt til, og starter Steam igjen.
+- **Fiks** oppdaterer startinnstillingene for alle spill etter dagens oppsett uten å legge til eller fjerne spill.
+- **SRM-oppsett** viser SRM-programmet, viktige SRM-innstillinger, RetroArch-stier og hvilken parser/emulator hver konsoll bruker (kan velges per konsoll).
+- Spill fra tidligere versjoner hentes inn automatisk og beholdes uendret i Steam.
+- Navn og startvalg du har endret selv i Steam beholdes. Duplikater som SRM ellers ville laget av omdøpte spill, slås sammen.
+- En konsoll som blir tom, ryddes med SRM `remove` (SRM henger hvis den får null spill).
+- Fjernet: ES-DE-lesing, autosync/bakgrunnstjeneste, Reset, Feilsøking-menyen og de gamle skriptene. Installering slår av og fjerner en gammel autosync-tjeneste.
+- Installering bytter ut programmappa i ett steg, slik at oppdatering fra den gamle menyen fungerer.
+
 ## 0.7.5 — 2026-07-21
 
 - `Oppdater ES-DE favoritter` gjør ikke lenger en full SRM remove+add-runde hver gang du trykker den. Hvis favorittene dine er uendret siden forrige vellykkede synkronisering, og Steam-biblioteket faktisk stemmer overens med det (ingen manglende eller foreldede snarveier), rapporterer knappen bare at alt allerede er synkronisert uten å røre Steam/SRM i det hele tatt.

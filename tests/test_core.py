@@ -1,1140 +1,505 @@
 from __future__ import annotations
 
-import contextlib
 import io
 import json
+import os
+import stat
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
 
-from emudeck_favorites_sync.autosync import (
-    autosync_once,
-    autosync_status,
-    esde_closed,
-    favorite_signature,
-    reset_favorites_sync,
-    save_autosync_state,
-    save_last_srm_entries,
-)
+from emudeck_favorites_sync import cli
 from emudeck_favorites_sync.config import discover_config
-from emudeck_favorites_sync.cli import _print_autosync_summary, main as cli_main
-from emudeck_favorites_sync.models import Diagnostic, GameEntry, Manifest, SystemHealth
-from emudeck_favorites_sync.planner import build_plan
-from emudeck_favorites_sync.scanner import scan
-from emudeck_favorites_sync.srm_apply import describe_parser_matches, purge_owned_parsers, stage_apply
-from emudeck_favorites_sync.srm_cli import SrmCliResult, find_srm_appimage, set_srm_app_path
-from emudeck_favorites_sync.state import load_manifest, save_manifest_atomic
-from emudeck_favorites_sync.srm_preview import build_srm_preview, load_parser_preferences, save_parser_preference
-from emudeck_favorites_sync.steam_shortcuts import (
-    import_to_steam,
-    manual_entries,
-    read_shortcuts,
-    remove_all_owned_shortcuts,
-    remove_stale_shortcuts,
-    write_shortcuts,
+from emudeck_favorites_sync.engine import FIX, UPDATE, run
+from emudeck_favorites_sync.games import (
+    APPLIED,
+    PENDING_ADD,
+    load_games,
+    move_out_of_srm,
+    move_to_srm,
+    save_games,
 )
+from emudeck_favorites_sync.library import logical_id, scan_library
+from emudeck_favorites_sync.srm import (
+    OWNED_PARSER_PREFIX,
+    build_entry,
+    load_srm,
+    manifest_path,
+    manual_root,
+    new_owned_parser,
+    parser_extensions,
+    read_manifest,
+    save_parser_preference,
+)
+from emudeck_favorites_sync.srm_cli import run_srm
+from emudeck_favorites_sync.steam import field, read_shortcuts, set_field, shortcut_appid, write_shortcuts
 
 
-def gamelist(*games: str) -> str:
-    return '<?xml version="1.0"?><gameList>' + "".join(games) + "</gameList>"
+FAKE_SRM = Path(__file__).resolve().parent / "fake_srm.py"
 
 
-def game(path: str, name: str = "Game", favorite: str | None = "true", extra: str = "") -> str:
-    favorite_xml = f"<favorite>{favorite}</favorite>" if favorite is not None else ""
-    return f"<game><path>{path}</path><name>{name}</name>{favorite_xml}{extra}</game>"
+def glob_parser(system: str, title: str, exe: str, args: str, extensions: str) -> dict:
+    return {
+        "parserType": "Glob",
+        "configTitle": title,
+        "parserId": f"emudeck-{system}-{title}",
+        "steamCategories": [title.split(" - ")[0]],
+        "romDirectory": f"${{romsdirglobal}}/{system}",
+        "executable": {"path": exe, "shortcutPassthrough": False, "appendArgsToExecutable": True},
+        "executableArgs": args,
+        "executableModifier": '"${exePath}"',
+        "startInDirectory": "",
+        "titleModifier": "${fuzzyTitle}",
+        "parserInputs": {"glob": f"${{title}}@({extensions})"},
+        "disabled": True,
+    }
 
 
-class Fixture:
+class Home:
+    """A fake Steam Deck home with EmuDeck-like SRM parsers and a fake SRM."""
+
     def __init__(self) -> None:
-        self.temp = tempfile.TemporaryDirectory()
-        self.home = Path(self.temp.name)
-        self.esde = self.home / "ES-DE"
-        self.gamelists = self.esde / "gamelists"
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)
         self.roms = self.home / "Emulation/roms"
-        self.state = self.home / "state"
-        self.gamelists.mkdir(parents=True)
-        self.roms.mkdir(parents=True)
-        (self.esde / "es_settings.xml").write_text(
-            f'<settings><string name="ROMDirectory" value="{self.roms}" />'
-            '<string name="SaveGamelistsMode" value="always" /></settings>', encoding="utf-8"
-        )
+        self.user_data = self.home / ".config/steam-rom-manager/userData"
+        self.vdf = self.home / ".local/share/Steam/userdata/12345/config/shortcuts.vdf"
+        self.state = self.home / ".local/state/emudeck-favorites-sync"
+        self._roms()
+        self._srm()
+        write_shortcuts(self.vdf, [{
+            "appid": shortcut_appid('"/usr/bin/firefox"', "Firefox"), "AppName": "Firefox",
+            "Exe": '"/usr/bin/firefox"', "StartDir": "", "LaunchOptions": "", "tags": {},
+        }])
+        os.environ["FAKE_SRM_HOME"] = str(self.home)
 
-    def close(self) -> None:
-        self.temp.cleanup()
+    def cleanup(self) -> None:
+        self._tmp.cleanup()
 
-    def add_system(self, name: str, xml: str, files: tuple[str, ...] = ()) -> None:
-        system_gamelist = self.gamelists / name
-        system_roms = self.roms / name
-        system_gamelist.mkdir(parents=True)
-        system_roms.mkdir(parents=True)
-        (system_gamelist / "gamelist.xml").write_text(xml, encoding="utf-8")
-        for relative in files:
-            target = system_roms / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(b"rom")
+    def touch(self, relative: str, text: str = "x") -> Path:
+        path = self.roms / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def _roms(self) -> None:
+        self.touch("snes/Super Game (USA).sfc")
+        self.touch("snes/Other Game (Europe).smc")
+        self.touch("snes/Third.sfc")
+        self.touch("snes/readme.txt")
+        self.touch("snes/systeminfo.txt")
+        self.touch("psx/Multi (USA).m3u/Multi (USA).m3u", "Multi (Disc 1).chd\nMulti (Disc 2).chd\n")
+        self.touch("psx/Multi (USA).m3u/Multi (Disc 1).chd")
+        self.touch("psx/Multi (USA).m3u/Multi (Disc 2).chd")
+        self.touch("psx/Two.m3u", "Two (Disc 1).cue\nTwo (Disc 2).cue\n")
+        self.touch("psx/Two (Disc 1).cue", 'FILE "Two (Disc 1).bin" BINARY\n')
+        self.touch("psx/Two (Disc 1).bin")
+        self.touch("psx/Two (Disc 2).cue", 'FILE "Two (Disc 2).bin" BINARY\n')
+        self.touch("psx/Two (Disc 2).bin")
+        self.touch("psx/Single.cue", 'FILE "Single.bin" BINARY\n')
+        self.touch("psx/Single.bin")
+        self.touch("psx/Sub/Nested.chd")
+        self.touch("ps2/Big.m3u/Big.m3u", "Big (Disc 1).chd\nBig (Disc 2).chd\n")
+        self.touch("ps2/Big.m3u/Big (Disc 1).chd")
+        self.touch("ps2/Big.m3u/Big (Disc 2).chd")
+        self.touch("ps2/Solo.chd")
+        self.touch("gba/Mini.gba")
+        self.touch("n64/NoParser.z64")
+        self.touch("desktop/thing.desktop")
+
+    def _srm(self) -> None:
+        parsers = [
+            glob_parser("snes", "Nintendo SNES - RetroArch Snes9x", "${retroarchpath}",
+                        '-L ${racores}${/}snes9x_libretro.so "${filePath}"', ".sfc|.SFC|.smc|.zip"),
+            glob_parser("psx", "Sony PlayStation - DuckStation", "/usr/bin/duckstation",
+                        '-batch "${filePath}"', ".cue|.chd|.m3u|.CHD"),
+            glob_parser("ps2", "Sony PlayStation 2 - PCSX2", "/usr/bin/pcsx2", '-batch "${filePath}"', ".chd|.iso"),
+            glob_parser("gba", "Nintendo GBA - RetroArch mGBA", "${retroarchpath}",
+                        '-L ${racores}${/}mgba_libretro.so "${filePath}"', ".gba|.zip"),
+            {"parserType": "Glob", "configTitle": "Something else", "parserId": "other", "romDirectory": "/nowhere",
+             "executable": {"path": "/x"}, "disabled": False},
+        ]
+        self.user_data.mkdir(parents=True)
+        self.write_parsers(parsers)
+        (self.user_data / "userSettings.json").write_text(json.dumps({
+            "environmentVariables": {
+                "retroarchPath": "/usr/bin/retroarch", "raCoresDirectory": "/cores",
+                "romsDirectory": str(self.roms), "steamDirectory": str(self.home / ".local/share/Steam"),
+            },
+            "previewSettings": {"deleteDisabledShortcuts": False, "retrieveCurrentSteamImages": True},
+        }), encoding="utf-8")
+        app = self.home / "Applications/Steam-ROM-Manager.AppImage"
+        app.parent.mkdir(parents=True)
+        app.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_SRM}" "$@"\n', encoding="utf-8")
+        app.chmod(app.stat().st_mode | stat.S_IXUSR)
+
+    # -- helpers
+
+    def parsers(self) -> list:
+        return json.loads((self.user_data / "userConfigurations.json").read_text(encoding="utf-8"))
+
+    def write_parsers(self, parsers: list) -> None:
+        (self.user_data / "userConfigurations.json").write_text(json.dumps(parsers), encoding="utf-8")
 
     def config(self):
-        return discover_config(
-            esde_override=str(self.esde), roms_override=str(self.roms),
-            state_override=str(self.state), home_override=str(self.home)
-        )
+        return discover_config(home_override=str(self.home))
 
-    def add_steam_user(self, user: str = "123456") -> Path:
-        config_dir = self.home / ".local/share/Steam/userdata" / user / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
-        return config_dir
+    def shortcuts(self) -> list[dict]:
+        return read_shortcuts(self.vdf)
+
+    def names(self) -> list[str]:
+        return sorted(str(field(item, "AppName")) for item in self.shortcuts())
+
+    def srm_calls(self) -> list[dict]:
+        path = self.user_data / "fake-srm-calls.log"
+        if not path.is_file():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    def old_install(self, favorites: dict[str, list[tuple[str, str]]]) -> None:
+        """Recreate what 0.7.5 left behind: owned parsers, manifests, applied.json and Steam shortcuts."""
+        config = self.config()
+        srm = load_srm(config)
+        parsers = self.parsers()
+        applied = []
+        for system, games in favorites.items():
+            source = next(p for p in parsers if p.get("parserId", "").startswith(f"emudeck-{system}-"))
+            entries = []
+            for esde_name, rel_path in games:
+                launch = self.roms / system / rel_path
+                if launch.is_dir():
+                    launch = launch / launch.name
+                entries.append(build_entry(esde_name, str(launch.resolve()), system, source, srm.environment).entry)
+                applied.append({"system": system, "title": esde_name, "relative_rom_path": rel_path,
+                                "resolved_rom_path": str(launch.resolve())})
+            path = manifest_path(config, system)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(entries), encoding="utf-8")
+            parsers.append(new_owned_parser(source, system, manual_root(config) / system))
+        self.write_parsers(parsers)
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "applied.json").write_text(json.dumps({"schema_version": 1, "entries": applied}), encoding="utf-8")
+        # 0.7.5 ran SRM add with all owned parsers enabled.
+        result = run_srm(config, "add", list(favorites))
+        assert result.ok, result
 
 
-class ScannerTests(unittest.TestCase):
+class Base(unittest.TestCase):
     def setUp(self) -> None:
-        self.fx = Fixture()
+        self.env = Home()
+        self.addCleanup(self.env.cleanup)
 
-    def tearDown(self) -> None:
-        self.fx.close()
+    def library(self):
+        config = self.env.config()
+        return config, scan_library(config, load_srm(config))
 
-    def test_child_favorite_is_included(self) -> None:
-        self.fx.add_system("ps2", gamelist(game("./Title.chd", "Title")), ("Title.chd",))
-        result = scan(self.fx.config())
-        self.assertEqual([entry.title for entry in result.entries], ["Title"])
-        self.assertTrue(result.systems["ps2"].removal_safe)
+    def add(self, *items: tuple[str, str]) -> None:
+        config, library = self.library()
+        records = load_games(config, library)
+        games = {(g.system, g.rel_path): g for g in library.games}
+        for key in items:
+            move_to_srm(records, games[key])
+        save_games(config, records)
 
-    def test_false_and_missing_favorite_are_excluded(self) -> None:
-        self.fx.add_system("ps2", gamelist(
-            game("./One.chd", favorite="false"), game("./Two.chd", favorite=None)
-        ), ("One.chd", "Two.chd"))
-        self.assertEqual(scan(self.fx.config()).entries, [])
+    def remove(self, *items: tuple[str, str]) -> None:
+        config, library = self.library()
+        records = load_games(config, library)
+        for system, rel_path in items:
+            move_out_of_srm(records, logical_id(system, rel_path))
+        save_games(config, records)
 
-    def test_attribute_favorite_is_accepted_with_warning(self) -> None:
-        xml = '<gameList><game favorite="true"><path>./One.chd</path><name>One</name></game></gameList>'
-        self.fx.add_system("ps2", xml, ("One.chd",))
-        result = scan(self.fx.config())
-        self.assertEqual(len(result.entries), 1)
-        self.assertIn("LEGACY_FAVORITE_ATTRIBUTE", {item.code for item in result.diagnostics})
+    def update(self, mode: str = UPDATE):
+        report = run(self.env.config(), mode)
+        self.assertEqual(report.error, "", report.summary())
+        return report
 
-    def test_subdirectories_are_preserved(self) -> None:
-        self.fx.add_system("c64", gamelist(game("./cartridge/Popeye.crt")), ("cartridge/Popeye.crt",))
-        entry = scan(self.fx.config()).entries[0]
-        self.assertEqual(entry.relative_rom_path, "cartridge/Popeye.crt")
 
-    def test_same_title_in_two_systems_has_different_id(self) -> None:
-        for system in ("ps2", "gc"):
-            self.fx.add_system(system, gamelist(game("./Game.iso")), ("Game.iso",))
-        entries = scan(self.fx.config()).entries
-        self.assertNotEqual(entries[0].id, entries[1].id)
-
-    def test_missing_rom_blocks_removals(self) -> None:
-        self.fx.add_system("ps2", gamelist(game("./Missing.chd")))
-        result = scan(self.fx.config())
-        self.assertFalse(result.systems["ps2"].removal_safe)
-        self.assertIn("MISSING_ROM", {item.code for item in result.diagnostics})
-
-    def test_malformed_xml_is_isolated(self) -> None:
-        self.fx.add_system("bad", "<gameList><game>")
-        self.fx.add_system("good", gamelist(game("./Good.rom", "Good")), ("Good.rom",))
-        result = scan(self.fx.config())
-        self.assertEqual([entry.title for entry in result.entries], ["Good"])
-        self.assertFalse(result.systems["bad"].removal_safe)
-
-    def test_junk_after_document_element_is_recovered(self) -> None:
-        xml = (
-            '<?xml version="1.0"?><gameList>'
-            + game("./One.rom", "One")
-            + "</gameList>"
-            + '<gameList>'
-            + game("./Two.rom", "Two")
-            + "</gameList>"
-        )
-        self.fx.add_system("gba", xml, ("One.rom", "Two.rom"))
-        result = scan(self.fx.config())
-        self.assertEqual([entry.title for entry in result.entries], ["One", "Two"])
-        self.assertTrue(result.systems["gba"].removal_safe)
-        self.assertIn("RECOVERED_XML_FRAGMENT", {item.code for item in result.diagnostics})
-
-    def test_top_level_game_fragment_is_recovered(self) -> None:
-        xml = game("./One.rom", "One") + game("./Two.rom", "Two")
-        self.fx.add_system("gba", xml, ("One.rom", "Two.rom"))
-        result = scan(self.fx.config())
-        self.assertEqual([entry.title for entry in result.entries], ["One", "Two"])
-        self.assertTrue(result.systems["gba"].removal_safe)
-
-    def test_cleanup_is_ignored(self) -> None:
-        cleanup = self.gamelists_path("CLEANUP")
-        cleanup.mkdir(parents=True)
-        (cleanup / "gamelist.xml").write_text("<broken", encoding="utf-8")
-        result = scan(self.fx.config())
-        self.assertNotIn("CLEANUP", result.systems)
-
-    def gamelists_path(self, name: str) -> Path:
-        return self.fx.gamelists / name
-
-    def test_traversal_is_rejected(self) -> None:
-        self.fx.add_system("ps2", gamelist(game("../../outside.rom")))
-        result = scan(self.fx.config())
-        self.assertEqual(result.entries, [])
-        self.assertIn("UNSAFE_PATH", {item.code for item in result.diagnostics})
-
-    def test_unicode_and_xml_entities(self) -> None:
-        self.fx.add_system("ps2", gamelist(game("./R&amp;D.chd", "Pokémon Æ")), ("R&D.chd",))
-        result = scan(self.fx.config())
-        self.assertEqual(result.entries[0].title, "Pokémon Æ")
-        self.assertTrue(result.entries[0].resolved_rom_path.endswith("R&D.chd"))
-
-    def test_alternative_emulator_is_captured(self) -> None:
-        self.fx.add_system("ps2", gamelist(game(
-            "./Game.chd", extra="<altemulator>PCSX2 Legacy</altemulator>"
-        )), ("Game.chd",))
-        self.assertEqual(scan(self.fx.config()).entries[0].alternative_emulator, "PCSX2 Legacy")
-
-    def test_multi_disc_m3u_folder_resolves_to_inner_playlist_file(self) -> None:
-        self.fx.add_system("psx", gamelist(game("./Game.m3u", "Game")), (
-            "Game.m3u/Game.m3u",
-            "Game.m3u/Game (Disc 1).chd",
-            "Game.m3u/Game (Disc 2).chd",
-        ))
-        entry = scan(self.fx.config()).entries[0]
-        self.assertEqual(entry.entry_type, "folder-game")
-        self.assertTrue(entry.resolved_rom_path.replace("\\", "/").endswith("Game.m3u/Game.m3u"))
-        self.assertEqual(entry.relative_rom_path, "Game.m3u")
-
-    def test_folder_game_without_matching_inner_file_keeps_directory_path(self) -> None:
-        self.fx.add_system("ps3", gamelist(game("./Game", "Game")), (
-            "Game/PS3_GAME/PARAM.SFO",
-        ))
-        entry = scan(self.fx.config()).entries[0]
-        self.assertEqual(entry.entry_type, "folder-game")
-        self.assertTrue(entry.resolved_rom_path.replace("\\", "/").endswith("/Game"))
-
-    def test_ps2_m3u_folder_warns_that_emulator_does_not_support_playlists(self) -> None:
-        self.fx.add_system("ps2", gamelist(game("./Game.m3u", "Game")), (
-            "Game.m3u/Game.m3u",
-            "Game.m3u/Game (Disc 1).chd",
-            "Game.m3u/Game (Disc 2).chd",
-        ))
-        result = scan(self.fx.config())
-        self.assertEqual(len(result.entries), 1)
-        self.assertIn("MULTI_DISC_PLAYLIST_UNSUPPORTED", {item.code for item in result.diagnostics})
-
-    def test_srm_preview_matches_existing_parser(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        parser_dir = self.add_srm_gba_parser()
-        config = self.fx.config()
-        preview = build_srm_preview(config, scan(config))
-        self.assertEqual(len(preview["entries"]), 1)
-        self.assertEqual(preview["unmatched"], [])
-        self.assertIn("Game.zip", preview["entries"][0]["launch_options"])
-        self.assertIn("SRM variables", preview["entries"][0]["warning"])
-
-    def test_srm_preview_matches_wiiu_nested_roms_parser(self) -> None:
-        self.fx.add_system("wiiu", gamelist(game("./roms/Game.wua", "Game")), ("roms/Game.wua",))
-        parser_dir = self.fx.home / ".config/steam-rom-manager/userData"
-        parser_dir.mkdir(parents=True, exist_ok=True)
-        (parser_dir / "userConfigurations.json").write_text(json.dumps([{
-            "configTitle": "Nintendo Wii U - Cemu (.wud, .wux, .wua)",
-            "parserType": "Glob",
-            "parserId": "source-wiiu",
-            "disabled": True,
-            "steamDirectory": "${steamdirglobal}",
-            "romDirectory": "${romsdirglobal}/wiiu/roms/",
-            "steamCategories": ["Nintendo Wii U - Cemu Native"],
-            "imageProviders": ["sgdb", "steamCDN"],
-            "onlineImageQueries": ["${fuzzyTitle}"],
-            "userAccounts": {"specifiedAccounts": ["Global"]},
-            "controllers": {},
-            "steamInputEnabled": "1",
-            "executable": {
-                "path": "/Emulation/tools/launchers/cemu.sh",
-                "appendArgsToExecutable": False,
-            },
-            "executableArgs": "vblank_mode=0 %command% -f -g \"${filePath}\"",
-            "startInDirectory": "",
-            "parserInputs": {"glob": "**/${title}@(.wua|.WUA|.wud|.WUD|.wux|.WUX)"},
-        }]), encoding="utf-8")
-        config = self.fx.config()
-        preview = build_srm_preview(config, scan(config))
-        self.assertEqual(preview["unmatched"], [])
-        self.assertEqual(preview["entries"][0]["parser_title"], "Nintendo Wii U - Cemu (.wud, .wux, .wua)")
-
-    def add_srm_gba_parser(self) -> Path:
-        parser_dir = self.fx.home / ".config/steam-rom-manager/userData"
-        parser_dir.mkdir(parents=True, exist_ok=True)
-        (parser_dir / "userConfigurations.json").write_text(json.dumps([{
-            "configTitle": "Nintendo Game Boy Advance - RetroArch mGBA",
-            "parserType": "Glob",
-            "parserId": "source-gba",
-            "disabled": True,
-            "steamDirectory": "${steamdirglobal}",
-            "romDirectory": "${romsdirglobal}",
-            "steamCategories": ["Nintendo Game Boy Advance"],
-            "imageProviders": ["sgdb", "steamCDN"],
-            "onlineImageQueries": ["${fuzzyTitle}"],
-            "userAccounts": {"specifiedAccounts": ["Global"]},
-            "controllers": {},
-            "steamInputEnabled": "1",
-            "executable": {
-                "path": "${retroarchpath}",
-                "appendArgsToExecutable": True,
-            },
-            "executableArgs": "-L ${racores}${/}mgba_libretro.${os:linux|so} \"${filePath}\"",
-            "startInDirectory": "",
-            "parserInputs": {
-                "glob": "{gba/**/!(homebrew),gba}/${title}@(.7z|.7Z|.gba|.GBA|.zip|.ZIP)"
-            },
-        }]), encoding="utf-8")
-        (parser_dir / "userSettings.json").write_text(json.dumps({
-            "previewSettings": {"deleteDisabledShortcuts": False},
-            "environmentVariables": {
-                "steamDirectory": str(self.fx.home / ".steam/steam"),
-                "romsDirectory": str(self.fx.roms),
-                "retroarchPath": "/usr/bin/retroarch",
-                "raCoresDirectory": "/usr/lib/libretro",
-                "localImagesDirectory": str(self.fx.home / "images"),
-                "userAccounts": ["Global"],
-            },
-        }), encoding="utf-8")
-        return parser_dir
-
-    def test_apply_dry_run_writes_nothing(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        parser_dir = self.add_srm_gba_parser()
-        config = self.fx.config()
-        result = stage_apply(config, scan(config), dry_run=True, steam_running=False)
-        self.assertTrue(result.ok)
-        self.assertFalse(result.written)
-        self.assertFalse((parser_dir / "manualManifests").exists())
-
-    def test_apply_confirm_writes_owned_manual_parser_and_manifest(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        parser_dir = self.add_srm_gba_parser()
-        config = self.fx.config()
-        result = stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        self.assertTrue(result.ok)
-        self.assertTrue(result.written)
-        configs = json.loads((parser_dir / "userConfigurations.json").read_text(encoding="utf-8"))
-        owned = [item for item in configs if item["parserId"] == "emudeck-favorites-sync:gba"]
-        self.assertEqual(len(owned), 1)
-        self.assertEqual(owned[0]["parserType"], "Manual")
-        self.assertEqual(owned[0]["steamCategories"], ["ES-DE Favorites", "Nintendo Game Boy Advance"])
-        manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/gba/favorites.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self.assertEqual(manifest[0]["target"], "/usr/bin/retroarch")
-        self.assertIn("/usr/lib/libretro/mgba_libretro.so", manifest[0]["launchOptions"])
-
-    def test_apply_warns_when_multiple_parsers_tie_for_same_system(self) -> None:
-        self.fx.add_system("switch", gamelist(game("./Game.nsp", "Game")), ("Game.nsp",))
-        parser_dir = self.fx.home / ".config/steam-rom-manager/userData"
-        parser_dir.mkdir(parents=True, exist_ok=True)
-
-        def make_parser(parser_id: str, config_title: str, executable_path: str) -> dict:
-            return {
-                "configTitle": config_title,
-                "parserType": "Glob",
-                "parserId": parser_id,
-                "disabled": False,
-                "steamDirectory": "${steamdirglobal}",
-                "romDirectory": "${romsdirglobal}/switch",
-                "steamCategories": ["Nintendo Switch"],
-                "imageProviders": ["sgdb"],
-                "onlineImageQueries": ["${fuzzyTitle}"],
-                "userAccounts": {"specifiedAccounts": ["Global"]},
-                "controllers": {},
-                "executable": {"path": executable_path, "appendArgsToExecutable": True},
-                "executableArgs": '"${filePath}"',
-                "startInDirectory": "",
-                "parserInputs": {"glob": "{switch/**,switch}/${title}.nsp"},
-            }
-
-        (parser_dir / "userConfigurations.json").write_text(json.dumps([
-            make_parser("source-switch-citron", "Nintendo Switch - Citron", "/Emulation/tools/launchers/citron.sh"),
-            make_parser("source-switch-eden", "Nintendo Switch - Eden", "/Emulation/tools/launchers/eden.sh"),
-        ]), encoding="utf-8")
-        (parser_dir / "userSettings.json").write_text(json.dumps({
-            "previewSettings": {"deleteDisabledShortcuts": False},
-            "environmentVariables": {
-                "steamDirectory": str(self.fx.home / ".steam/steam"),
-                "romsDirectory": str(self.fx.roms),
-            },
-        }), encoding="utf-8")
-
-        config = self.fx.config()
-        result = stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        self.assertTrue(result.ok)
-        ambiguous = [item for item in result.diagnostics if item.code == "AMBIGUOUS_SRM_PARSER"]
-        self.assertEqual(len(ambiguous), 1)
-        self.assertIn("Citron", ambiguous[0].message)
-        self.assertIn("Eden", ambiguous[0].message)
-        manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/switch/favorites.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self.assertEqual(manifest[0]["target"], "/Emulation/tools/launchers/citron.sh")
-
-    def test_parser_preference_resolves_ambiguous_parsers_without_warning(self) -> None:
-        parser_dir = self.fx.home / ".config/steam-rom-manager/userData"
-        parser_dir.mkdir(parents=True, exist_ok=True)
-
-        def make_parser(parser_id: str, config_title: str, executable_path: str) -> dict:
-            return {
-                "configTitle": config_title,
-                "parserType": "Glob",
-                "parserId": parser_id,
-                "disabled": False,
-                "steamDirectory": "${steamdirglobal}",
-                "romDirectory": "${romsdirglobal}/switch",
-                "steamCategories": ["Nintendo Switch"],
-                "imageProviders": ["sgdb"],
-                "onlineImageQueries": ["${fuzzyTitle}"],
-                "userAccounts": {"specifiedAccounts": ["Global"]},
-                "controllers": {},
-                "executable": {"path": executable_path, "appendArgsToExecutable": True},
-                "executableArgs": '"${filePath}"',
-                "startInDirectory": "",
-                "parserInputs": {"glob": "{switch/**,switch}/${title}.nsp"},
-            }
-
-        self.fx.add_system("switch", gamelist(game("./Game.nsp", "Game")), ("Game.nsp",))
-        (parser_dir / "userConfigurations.json").write_text(json.dumps([
-            make_parser("source-switch-citron", "Nintendo Switch - Citron", "/Emulation/tools/launchers/citron.sh"),
-            make_parser("source-switch-eden", "Nintendo Switch - Eden", "/Emulation/tools/launchers/eden.sh"),
-            make_parser("source-switch-ryujinx", "Nintendo Switch - Ryujinx", "/Emulation/tools/launchers/ryujinx.sh"),
-        ]), encoding="utf-8")
-        (parser_dir / "userSettings.json").write_text(json.dumps({
-            "previewSettings": {"deleteDisabledShortcuts": False},
-            "environmentVariables": {
-                "steamDirectory": str(self.fx.home / ".steam/steam"),
-                "romsDirectory": str(self.fx.roms),
-            },
-        }), encoding="utf-8")
-
-        config = self.fx.config()
-        save_parser_preference(config, "switch", "Eden")
-
-        result = stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        self.assertTrue(result.ok)
-        self.assertEqual([item.code for item in result.diagnostics if item.code == "AMBIGUOUS_SRM_PARSER"], [])
-        manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/switch/favorites.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self.assertEqual(manifest[0]["target"], "/Emulation/tools/launchers/eden.sh")
-
-        not_found = save_parser_preference(config, "switch", "Snes9x")
-        self.assertEqual(not_found["switch"], "Snes9x")
-        result2 = stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        preference_not_found = [item for item in result2.diagnostics if item.code == "PARSER_PREFERENCE_NOT_FOUND"]
-        self.assertEqual(len(preference_not_found), 1)
-        self.assertIn("Snes9x", preference_not_found[0].message)
-
-        cleared = save_parser_preference(config, "switch", "")
-        self.assertEqual(cleared, {})
-        self.assertEqual(load_parser_preferences(config), {})
-        result3 = stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        self.assertEqual(len([item for item in result3.diagnostics if item.code == "AMBIGUOUS_SRM_PARSER"]), 1)
-
-        save_parser_preference(config, "switch", "Eden")
-        matches = describe_parser_matches(config, scan(config))
-        switch_match = next(item for item in matches if item["system"] == "switch")
-        self.assertEqual(switch_match["matched_parser"], "Nintendo Switch - Eden")
-        self.assertEqual(switch_match["competing_parsers"], [])
-        self.assertEqual(switch_match["preference"], "Eden")
-
-    def test_apply_warns_when_srm_variable_does_not_resolve(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        parser_dir = self.fx.home / ".config/steam-rom-manager/userData"
-        parser_dir.mkdir(parents=True, exist_ok=True)
-        (parser_dir / "userConfigurations.json").write_text(json.dumps([{
-            "configTitle": "Nintendo Game Boy Advance - RetroArch mGBA",
-            "parserType": "Glob",
-            "parserId": "source-gba",
-            "disabled": True,
-            "steamDirectory": "${steamdirglobal}",
-            "romDirectory": "${romsdirglobal}",
-            "steamCategories": ["Nintendo Game Boy Advance"],
-            "imageProviders": ["sgdb"],
-            "onlineImageQueries": ["${fuzzyTitle}"],
-            "userAccounts": {"specifiedAccounts": ["Global"]},
-            "controllers": {},
-            "executable": {"path": "${retroarchpath}", "appendArgsToExecutable": True},
-            "executableArgs": '-L ${racores}${/}mgba_libretro.${os:linux|so} "${filePath}"',
-            "startInDirectory": "",
-            "parserInputs": {"glob": "{gba/**,gba}/${title}@(.zip)"},
-        }]), encoding="utf-8")
-        (parser_dir / "userSettings.json").write_text(json.dumps({
-            "previewSettings": {"deleteDisabledShortcuts": False},
-            "environmentVariables": {
-                "steamDirectory": str(self.fx.home / ".steam/steam"),
-                "romsDirectory": str(self.fx.roms),
-                # Intentionally missing "retroarchPath" and "raCoresDirectory", simulating
-                # SRM global variables that were never configured or use different key names.
-            },
-        }), encoding="utf-8")
-
-        config = self.fx.config()
-        result = stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        self.assertTrue(result.ok)
-        unresolved = [item for item in result.diagnostics if item.code == "UNRESOLVED_SRM_VARIABLE"]
-        self.assertEqual(len(unresolved), 1)
-        self.assertIn("retroarchpath", unresolved[0].message.casefold())
-        manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/gba/favorites.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self.assertEqual(manifest[0]["target"], "")
-
-        matches = describe_parser_matches(config, scan(config))
-        gba_match = next(item for item in matches if item["system"] == "gba")
-        self.assertTrue(gba_match["unresolved_target"])
-        self.assertEqual(gba_match["resolved_target"], "")
-
-    def test_describe_parser_matches_flags_ambiguous_and_healthy_systems(self) -> None:
-        self.fx.add_system("switch", gamelist(game("./Game.nsp", "Game")), ("Game.nsp",))
-        self.fx.add_system("gba", gamelist(game("./Other.zip", "Other")), ("Other.zip",))
-        self.add_srm_gba_parser()
-        parser_dir = self.fx.home / ".config/steam-rom-manager/userData"
-
-        def make_switch_parser(parser_id: str, config_title: str, executable_path: str) -> dict:
-            return {
-                "configTitle": config_title,
-                "parserType": "Glob",
-                "parserId": parser_id,
-                "disabled": False,
-                "steamDirectory": "${steamdirglobal}",
-                "romDirectory": "${romsdirglobal}/switch",
-                "steamCategories": ["Nintendo Switch"],
-                "imageProviders": ["sgdb"],
-                "onlineImageQueries": ["${fuzzyTitle}"],
-                "userAccounts": {"specifiedAccounts": ["Global"]},
-                "controllers": {},
-                "executable": {"path": executable_path, "appendArgsToExecutable": True},
-                "executableArgs": '"${filePath}"',
-                "startInDirectory": "",
-                "parserInputs": {"glob": "{switch/**,switch}/${title}.nsp"},
-            }
-
-        configs = json.loads((parser_dir / "userConfigurations.json").read_text(encoding="utf-8"))
-        configs.append(make_switch_parser("source-switch-citron", "Nintendo Switch - Citron", "/Emulation/tools/launchers/citron.sh"))
-        configs.append(make_switch_parser("source-switch-eden", "Nintendo Switch - Eden", "/Emulation/tools/launchers/eden.sh"))
-        (parser_dir / "userConfigurations.json").write_text(json.dumps(configs), encoding="utf-8")
-
-        config = self.fx.config()
-        matches = describe_parser_matches(config, scan(config))
-        by_system = {item["system"]: item for item in matches}
-
-        self.assertEqual(by_system["switch"]["matched_parser"], "Nintendo Switch - Citron")
-        self.assertEqual(by_system["switch"]["competing_parsers"], ["Nintendo Switch - Citron", "Nintendo Switch - Eden"])
-
-        self.assertEqual(by_system["gba"]["matched_parser"], "Nintendo Game Boy Advance - RetroArch mGBA")
-        self.assertEqual(by_system["gba"]["competing_parsers"], [])
-        self.assertFalse(by_system["gba"]["unresolved_target"])
-        self.assertEqual(by_system["gba"]["resolved_target"], "/usr/bin/retroarch")
-
-    def test_apply_preserves_owned_parser_when_system_has_no_current_favorites(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        parser_dir = self.add_srm_gba_parser()
-        config = self.fx.config()
-        first = stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        self.assertTrue(first.ok)
-
-        (self.fx.gamelists / "gba/gamelist.xml").write_text(
-            gamelist(game("./Game.zip", "Game", favorite="false")), encoding="utf-8"
-        )
-        second = stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        self.assertTrue(second.ok)
-        configs = json.loads((parser_dir / "userConfigurations.json").read_text(encoding="utf-8"))
-        owned = [item for item in configs if item["parserId"] == "emudeck-favorites-sync:gba"]
-        self.assertEqual(len(owned), 1)
-        self.assertEqual(owned[0]["parserType"], "Manual")
-        manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/gba/favorites.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self.assertEqual(manifest, [])
-
-    def test_apply_keeps_shared_esde_favorites_collection_on_preserved_parser(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game", favorite="false")), ("Game.zip",))
-        parser_dir = self.add_srm_gba_parser()
-        configs = json.loads((parser_dir / "userConfigurations.json").read_text(encoding="utf-8"))
-        configs.append({
-            "configTitle": "ES-DE Favorites Sync - Nintendo Game Boy Advance",
-            "parserType": "Manual",
-            "parserId": "emudeck-favorites-sync:gba",
-            "disabled": False,
-            "steamDirectory": "${steamdirglobal}",
-            "steamCategories": ["ES-DE Favorites", "Nintendo Game Boy Advance"],
-            "parserInputs": {"manualManifests": str(parser_dir / "manualManifests/emudeck-favorites-sync/gba")},
+class LibraryTests(Base):
+    def test_scan_lists_only_games(self) -> None:
+        _, library = self.library()
+        found = {(g.system, g.rel_path) for g in library.games}
+        self.assertEqual(found, {
+            ("snes", "Other Game (Europe).smc"), ("snes", "Super Game (USA).sfc"), ("snes", "Third.sfc"),
+            ("psx", "Multi (USA).m3u"), ("psx", "Two.m3u"), ("psx", "Single.cue"), ("psx", "Sub/Nested.chd"),
+            ("ps2", "Big.m3u/Big (Disc 1).chd"), ("ps2", "Big.m3u/Big (Disc 2).chd"), ("ps2", "Solo.chd"),
+            ("gba", "Mini.gba"), ("n64", "NoParser.z64"),
         })
-        (parser_dir / "userConfigurations.json").write_text(json.dumps(configs), encoding="utf-8")
-        result = stage_apply(self.fx.config(), scan(self.fx.config()), dry_run=False, steam_running=False)
-        self.assertTrue(result.ok)
-        updated = json.loads((parser_dir / "userConfigurations.json").read_text(encoding="utf-8"))
-        owned = [item for item in updated if item["parserId"] == "emudeck-favorites-sync:gba"]
-        self.assertEqual(len(owned), 1)
-        self.assertEqual(owned[0]["steamCategories"], ["ES-DE Favorites", "Nintendo Game Boy Advance"])
-        manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/gba/favorites.json"
-        self.assertEqual(json.loads(manifest_path.read_text(encoding="utf-8")), [])
 
-    def test_apply_confirm_blocks_when_steam_runs(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        self.add_srm_gba_parser()
-        result = stage_apply(self.fx.config(), scan(self.fx.config()), dry_run=False, steam_running=True)
-        self.assertFalse(result.ok)
-        self.assertIn("STEAM_RUNNING", {item.code for item in result.diagnostics})
+    def test_sorted_by_console_then_name(self) -> None:
+        _, library = self.library()
+        keys = [(g.system.casefold(), g.rel_path.casefold()) for g in library.games]
+        self.assertEqual(keys, sorted(keys))
 
-    def test_apply_allows_warning_when_unincluded_missing_rom_exists(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        self.fx.add_system("wiiu", gamelist(game("./Missing.wua", "Missing")))
-        self.add_srm_gba_parser()
-        result = stage_apply(self.fx.config(), scan(self.fx.config()), dry_run=True, steam_running=False)
-        self.assertTrue(result.ok)
-        self.assertEqual(result.entries_written, 1)
-        self.assertIn("REMOVAL_NOT_SAFE", {item.code for item in result.diagnostics})
-        self.assertNotIn("SCAN_NOT_SAFE", {item.code for item in result.diagnostics})
+    def test_m3u_folder_launches_inner_playlist(self) -> None:
+        _, library = self.library()
+        game = next(g for g in library.games if g.rel_path == "Multi (USA).m3u")
+        self.assertTrue(game.launch_path.endswith("Multi (USA).m3u/Multi (USA).m3u"))
+        self.assertEqual(game.title, "Multi (USA)")
+        self.assertEqual(game.id, logical_id("psx", "Multi (USA).m3u"))
 
-    def test_favorite_signature_changes_when_favorite_changes(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./One.zip", "One")), ("One.zip", "Two.zip"))
-        config = self.fx.config()
-        before = favorite_signature(scan(config))
-        (self.fx.gamelists / "gba/gamelist.xml").write_text(
-            gamelist(game("./Two.zip", "Two")), encoding="utf-8"
-        )
-        after = favorite_signature(scan(config))
-        self.assertNotEqual(before, after)
-
-    def test_autosync_status_lists_current_favorites(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        data = autosync_status(self.fx.config())
-        self.assertEqual(data["current_favorites_count"], 1)
-        self.assertEqual(data["favorites"][0]["title"], "Game")
-
-    def test_autosync_waits_for_steam_then_stages_when_closed(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        parser_dir = self.add_srm_gba_parser()
-        self.fx.add_steam_user()
-        config = self.fx.config()
-        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": True}}):
-            waiting = autosync_once(config)
-        self.assertTrue(waiting["changed"])
-        self.assertFalse(waiting["synced"])
-        self.assertEqual(waiting["reason"], "Steam is running")
-        self.assertTrue(waiting["state"]["pending"])
-
-        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": False}}), \
-                patch("emudeck_favorites_sync.autosync.run_srm_remove_owned", return_value=SrmCliResult(ok=True, attempted=True)), \
-                patch("emudeck_favorites_sync.autosync.run_srm_add_owned", return_value=SrmCliResult(ok=True, attempted=True)):
-            synced = autosync_once(config)
-        self.assertTrue(synced["synced"])
-        self.assertFalse(synced["state"]["pending"])
-        self.assertEqual(synced["state"]["last_result"], "synced-and-srm-added")
-        manifest_path = parser_dir / "manualManifests/emudeck-favorites-sync/gba/favorites.json"
-        self.assertTrue(manifest_path.is_file())
-        self.assertIsNone(synced["steam_import"])
-        applied = load_manifest(config.state_dir / "applied.json")
-        plan = build_plan(scan(config), applied)
-        self.assertEqual(plan.additions, [])
-        self.assertEqual(plan.removals, [])
-
-    def test_autosync_stays_pending_if_srm_add_fails(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        self.add_srm_gba_parser()
-        config = self.fx.config()
-        failed_srm = SrmCliResult(ok=False, attempted=True)
-        failed_srm.diagnostics.append(Diagnostic("error", "SRM_ADD_FAILED", "nope"))
-        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": False}}), \
-                patch("emudeck_favorites_sync.autosync.run_srm_remove_owned", return_value=SrmCliResult(ok=True, attempted=True)), \
-                patch("emudeck_favorites_sync.autosync.run_srm_add_owned", return_value=failed_srm):
-            synced = autosync_once(config)
-        self.assertTrue(synced["synced"])
-        self.assertTrue(synced["state"]["pending"])
-        self.assertTrue(synced["state"]["srm_add_pending"])
-        self.assertEqual(synced["state"]["last_result"], "staged-srm-add-blocked")
-
-    def test_autosync_continues_if_srm_remove_fails(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        self.add_srm_gba_parser()
-        config = self.fx.config()
-        failed_remove = SrmCliResult(ok=False, attempted=True)
-        failed_remove.diagnostics.append(Diagnostic("error", "SRM_REMOVE_FAILED", "nope"))
-        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": False}}), \
-                patch("emudeck_favorites_sync.autosync.run_srm_remove_owned", return_value=failed_remove), \
-                patch("emudeck_favorites_sync.autosync.run_srm_add_owned", return_value=SrmCliResult(ok=True, attempted=True)):
-            synced = autosync_once(config)
-        self.assertTrue(synced["synced"])
-        self.assertFalse(synced["state"]["pending"])
-        self.assertFalse(synced["state"]["srm_remove_pending"])
-        self.assertEqual(synced["state"]["last_result"], "synced-and-srm-added")
-
-    def test_forced_autosync_skips_srm_when_already_in_sync(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        self.add_srm_gba_parser()
-        config = self.fx.config()
-        manifest = scan(config)
-        save_autosync_state(
-            config,
-            {
-                "enabled": False,
-                "pending": False,
-                "last_signature": favorite_signature(manifest),
-                "favorites": [],
-            },
-        )
-        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": False}}), \
-                patch("emudeck_favorites_sync.autosync.run_srm_remove_owned", return_value=SrmCliResult(ok=True, attempted=True)), \
-                patch("emudeck_favorites_sync.autosync.run_srm_add_owned", return_value=SrmCliResult(ok=True, attempted=True)) as add_mock:
-            no_change = autosync_once(config)
-            forced = autosync_once(config, force=True)
-        self.assertFalse(no_change["synced"])
-        self.assertEqual(no_change["reason"], "no pending changes")
-        self.assertFalse(no_change["forced"])
-        self.assertTrue(forced["forced"])
-        self.assertFalse(forced["changed"])
-        self.assertTrue(forced["synced"])
-        self.assertEqual(forced["reason"], "already in sync")
-        self.assertFalse(forced["state"]["pending"])
-        self.assertEqual(forced["state"]["last_result"], "already-in-sync")
-        add_mock.assert_not_called()
-
-    def test_forced_autosync_still_reconciles_when_steam_is_out_of_sync(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        self.add_srm_gba_parser()
-        self.fx.add_steam_user()
-        config = self.fx.config()
-        manifest = scan(config)
-        stage_apply(config, manifest, dry_run=False, steam_running=False)
-        save_autosync_state(
-            config,
-            {
-                "enabled": False,
-                "pending": False,
-                "last_signature": favorite_signature(manifest),
-                "favorites": [],
-            },
-        )
-        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": False}}), \
-                patch("emudeck_favorites_sync.autosync.run_srm_remove_owned", return_value=SrmCliResult(ok=True, attempted=True)), \
-                patch("emudeck_favorites_sync.autosync.run_srm_add_owned", return_value=SrmCliResult(ok=True, attempted=True)) as add_mock:
-            forced = autosync_once(config, force=True)
-        self.assertFalse(forced["changed"])
-        self.assertTrue(forced["synced"])
-        self.assertEqual(forced["steam_library"]["needs_reconcile"], True)
-        add_mock.assert_called_once()
-
-    def test_esde_closed_marks_last_esde_close_and_runs_one_check(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        self.add_srm_gba_parser()
-        config = self.fx.config()
-        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": True}}):
-            result = esde_closed(config)
-        self.assertEqual(result["reason"], "Steam is running")
-        self.assertTrue(result["state"]["pending"])
-        self.assertIsNotNone(result["state"]["last_esde_closed_at"])
-
-    def test_autosync_reconciles_when_steam_is_missing_current_favorites(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        self.add_srm_gba_parser()
-        self.fx.add_steam_user()
-        config = self.fx.config()
-        manifest = scan(config)
-        stage_apply(config, manifest, dry_run=False, steam_running=False)
-        save_autosync_state(
-            config,
-            {
-                "enabled": True,
-                "pending": False,
-                "last_signature": favorite_signature(manifest),
-                "favorites": [],
-            },
-        )
-        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": False}}), \
-                patch("emudeck_favorites_sync.autosync.run_srm_remove_owned", return_value=SrmCliResult(ok=True, attempted=True)), \
-                patch("emudeck_favorites_sync.autosync.run_srm_add_owned", return_value=SrmCliResult(ok=True, attempted=True)) as add_mock:
-            synced = autosync_once(config)
-        self.assertFalse(synced["changed"])
-        self.assertTrue(synced["synced"])
-        self.assertEqual(synced["steam_library"]["needs_reconcile"], True)
-        self.assertEqual(len(synced["steam_library"]["missing"]), 1)
-        add_mock.assert_called_once()
-
-    def test_autosync_reconciles_when_steam_has_stale_previous_favorites(self) -> None:
-        self.fx.add_system(
-            "gba",
-            gamelist(game("./One.zip", "One"), game("./Two.zip", "Two")),
-            ("One.zip", "Two.zip"),
-        )
-        self.add_srm_gba_parser()
-        steam_config_dir = self.fx.add_steam_user()
-        config = self.fx.config()
-        stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        previous = manual_entries(config)
-        import_to_steam(config, steam_running=False)
-
-        (self.fx.gamelists / "gba/gamelist.xml").write_text(
-            gamelist(game("./One.zip", "One")),
-            encoding="utf-8",
-        )
-        current_manifest = scan(config)
-        stage_apply(config, current_manifest, dry_run=False, steam_running=False)
-        save_last_srm_entries(config, previous)
-        save_autosync_state(
-            config,
-            {
-                "enabled": True,
-                "pending": False,
-                "last_signature": favorite_signature(current_manifest),
-                "favorites": [],
-            },
-        )
-        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": False}}), \
-                patch("emudeck_favorites_sync.autosync.run_srm_remove_owned", return_value=SrmCliResult(ok=True, attempted=True)), \
-                patch("emudeck_favorites_sync.autosync.run_srm_add_owned", return_value=SrmCliResult(ok=True, attempted=True)):
-            synced = autosync_once(config)
-        self.assertFalse(synced["changed"])
-        self.assertTrue(synced["synced"])
-        self.assertEqual(len(synced["steam_library"]["stale"]), 1)
-        shortcuts = read_shortcuts(steam_config_dir / "shortcuts.vdf")
-        self.assertEqual([item["AppName"] for item in shortcuts], ["One"])
-
-    def test_stale_cleanup_matches_srm_shortcut_with_different_quoting(self) -> None:
-        self.fx.add_system(
-            "gba",
-            gamelist(game("./One.zip", "One"), game("./Two.zip", "Two")),
-            ("One.zip", "Two.zip"),
-        )
-        self.add_srm_gba_parser()
-        steam_config_dir = self.fx.add_steam_user()
-        config = self.fx.config()
-        stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        previous = manual_entries(config)
-        stale = next(entry for entry in previous if entry["title"] == "Two")
-        write_shortcuts(
-            steam_config_dir / "shortcuts.vdf",
-            [
-                {
-                    "AppName": stale["title"],
-                    "Exe": str(stale["target"]).strip('"'),
-                    "StartDir": "",
-                    "LaunchOptions": str(stale["launchOptions"]).replace('"', ""),
-                    "tags": {"0": "Nintendo Game Boy Advance"},
-                }
-            ],
-        )
-
-        (self.fx.gamelists / "gba/gamelist.xml").write_text(
-            gamelist(game("./One.zip", "One")),
-            encoding="utf-8",
-        )
-        stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        result = remove_stale_shortcuts(
-            config,
-            previous_entries=previous,
-            current_entries=manual_entries(config),
-            steam_running=False,
-        )
-        self.assertTrue(result.ok)
-        self.assertEqual(result.removed, 1)
-        self.assertEqual(read_shortcuts(steam_config_dir / "shortcuts.vdf"), [])
-
-    def test_stale_cleanup_removes_entry_when_only_emulator_target_changed(self) -> None:
-        self.fx.add_system("switch", gamelist(game("./Game.nsp", "Game")), ("Game.nsp",))
-        self.add_srm_gba_parser()
-        steam_config_dir = self.fx.add_steam_user()
-        previous_entry = {
-            "title": "Game", "target": "/Emulation/tools/launchers/citron.sh",
-            "startIn": "", "launchOptions": '"Game.nsp"', "appendArgsToExecutable": True,
-        }
-        current_entry = {
-            "title": "Game", "target": "/Emulation/tools/launchers/eden.sh",
-            "startIn": "", "launchOptions": '"Game.nsp"', "appendArgsToExecutable": True,
-        }
-        # Same title and launch options (only the emulator/target changed) — simulates a
-        # duplicate left behind in Steam after switching which emulator a system uses.
-        write_shortcuts(steam_config_dir / "shortcuts.vdf", [
-            {
-                "AppName": previous_entry["title"], "Exe": previous_entry["target"],
-                "StartDir": "", "LaunchOptions": previous_entry["launchOptions"],
-                "tags": {"0": "Nintendo Switch"},
-            },
-            {
-                "AppName": current_entry["title"], "Exe": current_entry["target"],
-                "StartDir": "", "LaunchOptions": current_entry["launchOptions"],
-                "tags": {"0": "Nintendo Switch"},
-            },
-        ])
-        config = self.fx.config()
-        result = remove_stale_shortcuts(
-            config, previous_entries=[previous_entry], current_entries=[current_entry], steam_running=False,
-        )
-        self.assertTrue(result.ok)
-        self.assertEqual(result.removed, 1)
-        remaining = read_shortcuts(steam_config_dir / "shortcuts.vdf")
-        self.assertEqual([item["Exe"] for item in remaining], [current_entry["target"]])
-
-    def test_purge_owned_parsers_dry_run_previews_without_changing_anything(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        parser_dir = self.add_srm_gba_parser()
-        config = self.fx.config()
-        stage_apply(config, scan(config), dry_run=False, steam_running=False)
-
-        preview = purge_owned_parsers(config, dry_run=True)
-        self.assertTrue(preview.ok)
-        self.assertEqual(preview.parsers_found, ["emudeck-favorites-sync:gba"])
-        self.assertEqual(preview.entries_found, 1)
-        configs = json.loads((parser_dir / "userConfigurations.json").read_text(encoding="utf-8"))
-        self.assertTrue(any(item["parserId"] == "emudeck-favorites-sync:gba" for item in configs))
-
-        confirmed = purge_owned_parsers(config, dry_run=False)
-        self.assertTrue(confirmed.ok)
-        configs_after = json.loads((parser_dir / "userConfigurations.json").read_text(encoding="utf-8"))
-        self.assertFalse(any(item["parserId"] == "emudeck-favorites-sync:gba" for item in configs_after))
-        self.assertFalse((parser_dir / "manualManifests/emudeck-favorites-sync").exists())
-
-    def test_remove_all_owned_shortcuts_removes_only_tagged_entries(self) -> None:
-        steam_config_dir = self.fx.add_steam_user()
-        write_shortcuts(steam_config_dir / "shortcuts.vdf", [
-            {"AppName": "Owned Game", "Exe": "/a", "StartDir": "", "LaunchOptions": "",
-             "tags": {"0": "ES-DE Favorites Sync", "1": "ES-DE Favorites"}},
-            {"AppName": "Favorites Tagged", "Exe": "/b", "StartDir": "", "LaunchOptions": "",
-             "tags": {"0": "ES-DE Favorites"}},
-            {"AppName": "Unrelated Game", "Exe": "/c", "StartDir": "", "LaunchOptions": "", "tags": {"0": "RPG"}},
-        ])
-        config = self.fx.config()
-        result = remove_all_owned_shortcuts(config, steam_running=False)
-        self.assertTrue(result.ok)
-        self.assertEqual(result.removed, 2)
-        remaining = read_shortcuts(steam_config_dir / "shortcuts.vdf")
-        self.assertEqual([item["AppName"] for item in remaining], ["Unrelated Game"])
-
-    def test_reset_blocks_when_steam_running(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        self.add_srm_gba_parser()
-        config = self.fx.config()
-        stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": True}}):
-            result = reset_favorites_sync(config, dry_run=False)
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["reason"], "Steam is running")
-
-    def test_reset_confirm_clears_parsers_shortcuts_and_state(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        parser_dir = self.add_srm_gba_parser()
-        steam_config_dir = self.fx.add_steam_user()
-        config = self.fx.config()
-        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": False}}), \
-                patch("emudeck_favorites_sync.autosync.run_srm_remove_owned", return_value=SrmCliResult(ok=True, attempted=True)), \
-                patch("emudeck_favorites_sync.autosync.run_srm_add_owned", return_value=SrmCliResult(ok=True, attempted=True)):
-            synced = autosync_once(config)
-        self.assertTrue(synced["synced"])
-        write_shortcuts(steam_config_dir / "shortcuts.vdf", [
-            {"AppName": "Game", "Exe": "/usr/bin/retroarch", "StartDir": "", "LaunchOptions": "",
-             "tags": {"0": "ES-DE Favorites Sync", "1": "ES-DE Favorites"}},
-        ])
-
-        with patch("emudeck_favorites_sync.autosync.collect_compatibility", return_value={"steam": {"running": False}}), \
-                patch("emudeck_favorites_sync.autosync.run_srm_remove_owned", return_value=SrmCliResult(ok=True, attempted=True)):
-            result = reset_favorites_sync(config, dry_run=False)
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["parsers_found"], ["emudeck-favorites-sync:gba"])
-        self.assertEqual(result["steam_cleanup"]["removed"], 1)
-        configs_after = json.loads((parser_dir / "userConfigurations.json").read_text(encoding="utf-8"))
-        self.assertFalse(any(item["parserId"] == "emudeck-favorites-sync:gba" for item in configs_after))
-        self.assertEqual(read_shortcuts(steam_config_dir / "shortcuts.vdf"), [])
-        status = autosync_status(config)
-        self.assertFalse(status["enabled"])
-        self.assertFalse(status["pending"])
-        self.assertFalse((config.state_dir / "desired.json").exists())
-
-    def test_srm_appimage_can_be_set_manually(self) -> None:
-        app = self.fx.home / "weird/place/Steam ROM Manager 2.AppImage"
-        app.parent.mkdir(parents=True)
-        app.write_bytes(b"appimage")
-        config = self.fx.config()
-        set_srm_app_path(config, str(app))
-        self.assertEqual(find_srm_appimage(config), app)
-
-    def test_srm_appimage_is_found_in_applications_with_versioned_name(self) -> None:
-        app = self.fx.home / "Applications/Steam-ROM-Manager-2.5.38.AppImage"
-        app.parent.mkdir(parents=True)
-        app.write_bytes(b"appimage")
-        self.assertEqual(find_srm_appimage(self.fx.config()), app)
-
-    def test_srm_appimage_is_found_in_emudeck_tools_root(self) -> None:
-        app = self.fx.home / "Emulation/tools/Steam-ROM-Manager.AppImage"
-        app.parent.mkdir(parents=True)
-        app.write_bytes(b"appimage")
-        self.assertEqual(find_srm_appimage(self.fx.config()), app)
-
-    def test_steam_import_replaces_only_owned_shortcuts(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip",))
-        parser_dir = self.add_srm_gba_parser()
-        steam_config_dir = self.fx.add_steam_user()
-        config = self.fx.config()
-        stage = stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        self.assertTrue(stage.ok)
-        result = import_to_steam(config, steam_running=False)
-        self.assertTrue(result.ok)
-        shortcuts = read_shortcuts(steam_config_dir / "shortcuts.vdf")
-        self.assertEqual(len(shortcuts), 1)
-        self.assertEqual(shortcuts[0]["AppName"], "Game")
-        self.assertEqual(shortcuts[0]["tags"]["0"], "ES-DE Favorites Sync")
-
-        (self.fx.gamelists / "gba/gamelist.xml").write_text(
-            gamelist(game("./Other.zip", "Other")), encoding="utf-8"
-        )
-        (self.fx.roms / "gba/Other.zip").write_bytes(b"rom")
-        stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        result = import_to_steam(config, steam_running=False)
-        self.assertTrue(result.ok)
-        shortcuts = read_shortcuts(steam_config_dir / "shortcuts.vdf")
-        self.assertEqual([item["AppName"] for item in shortcuts], ["Other"])
-
-    def test_stale_shortcut_cleanup_removes_previous_entries_not_current(self) -> None:
-        self.fx.add_system("gba", gamelist(game("./Game.zip", "Game")), ("Game.zip", "Other.zip"))
-        self.add_srm_gba_parser()
-        steam_config_dir = self.fx.add_steam_user()
-        config = self.fx.config()
-        stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        previous = manual_entries(config)
-        self.assertTrue(import_to_steam(config, steam_running=False).ok)
-
-        (self.fx.gamelists / "gba/gamelist.xml").write_text(
-            gamelist(game("./Other.zip", "Other")), encoding="utf-8"
-        )
-        stage_apply(config, scan(config), dry_run=False, steam_running=False)
-        current = manual_entries(config)
-        result = remove_stale_shortcuts(config, previous_entries=previous, current_entries=current, steam_running=False)
-        self.assertTrue(result.ok)
-        self.assertEqual(result.removed, 1)
-        shortcuts = read_shortcuts(steam_config_dir / "shortcuts.vdf")
-        self.assertEqual([item["AppName"] for item in shortcuts], [])
-
-    def test_list_favorites_prints_current_favorites_read_only(self) -> None:
-        self.fx.add_system("ps2", gamelist(game("./Game.chd", "Game")), ("Game.chd",))
-        buffer = io.StringIO()
-        with contextlib.redirect_stdout(buffer):
-            code = cli_main([
-                "--esde-dir", str(self.fx.esde), "--roms-dir", str(self.fx.roms),
-                "--state-dir", str(self.fx.state), "--home", str(self.fx.home),
-                "list-favorites",
-            ])
-        self.assertEqual(code, 0)
-        output = buffer.getvalue()
-        self.assertIn("ps2", output)
-        self.assertIn("Game", output)
-        self.assertFalse((self.fx.state / "desired.json").exists())
+    def test_parser_extensions(self) -> None:
+        parser = {"parserInputs": {"glob": "**/${title}@(.sfc|.SFC|.zip)"}}
+        self.assertEqual(parser_extensions(parser), {".sfc", ".zip"})
 
 
-class StateAndPlanTests(unittest.TestCase):
+class MigrationTests(Base):
     def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        super().setUp()
+        self.env.old_install({
+            "snes": [("Super Game", "Super Game (USA).sfc"), ("Other Game", "Other Game (Europe).smc")],
+            "psx": [("Multi", "Multi (USA).m3u")],
+        })
+        self.before = self.env.shortcuts()
 
-    def tearDown(self) -> None:
-        self.temp.cleanup()
+    def test_existing_games_are_imported_verbatim(self) -> None:
+        config, library = self.library()
+        old_manifests = {s: read_manifest(config, s) for s in ("snes", "psx")}
+        records = load_games(config, library)
+        self.assertEqual(len(records), 3)
+        self.assertTrue(all(r.status == APPLIED and r.appid for r in records))
+        by_rel = {r.rel_path: r for r in records}
+        self.assertEqual(set(by_rel), {"Super Game (USA).sfc", "Other Game (Europe).smc", "Multi (USA).m3u"})
+        self.assertIn(by_rel["Super Game (USA).sfc"].entry, old_manifests["snes"])
+        self.assertEqual(by_rel["Multi (USA).m3u"].id, logical_id("psx", "Multi (USA).m3u"))
+        self.assertEqual(self.env.shortcuts(), self.before)
 
-    def entry(self, path: str = "Game.chd", title: str = "Game") -> GameEntry:
-        return GameEntry("sha256:id", "ps2", title, f"./{path}", path, f"/roms/ps2/{path}")
+    def test_orphans_are_kept(self) -> None:
+        (self.env.roms / "snes/Other Game (Europe).smc").unlink()
+        (self.env.state / "applied.json").unlink()
+        config, library = self.library()
+        records = load_games(config, library)
+        self.assertEqual(len(records), 3)
+        orphan = next(r for r in records if r.title == "Other Game")
+        self.assertEqual(orphan.rel_path, "")
+        self.assertTrue(orphan.id.startswith("orphan:"))
 
-    def manifest(self, entries, safe: bool = True) -> Manifest:
-        return Manifest(
-            1, "2026-01-01T00:00:00Z", {}, {"removal_safe": safe}, list(entries),
-            {"ps2": SystemHealth("ps2", "/gamelist", "/roms/ps2", True, True, 1, len(entries), safe, "healthy" if safe else "broken")}, []
-        )
+    def test_mapping_without_applied_json_uses_rom_path(self) -> None:
+        (self.env.state / "applied.json").unlink()
+        config, library = self.library()
+        records = load_games(config, library)
+        self.assertEqual({r.rel_path for r in records}, {"Super Game (USA).sfc", "Other Game (Europe).smc", "Multi (USA).m3u"})
 
-    def test_atomic_state_roundtrip(self) -> None:
-        path = self.root / "nested/desired.json"
-        save_manifest_atomic(path, self.manifest([self.entry()]))
-        loaded = load_manifest(path)
-        self.assertEqual(loaded.entries[0].title, "Game")
-        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["schema_version"], 1)
 
-    def test_first_plan_adds_everything(self) -> None:
-        plan = build_plan(self.manifest([self.entry()]), None)
-        self.assertEqual(len(plan.additions), 1)
+class UpdateTests(Base):
+    def setUp(self) -> None:
+        super().setUp()
+        self.env.old_install({"snes": [("Super Game", "Super Game (USA).sfc"), ("Other Game", "Other Game (Europe).smc")],
+                              "psx": [("Multi", "Multi (USA).m3u")]})
+        self.appids_before = {field(s, "AppName"): field(s, "appid") for s in self.env.shortcuts()}
+        (self.env.user_data / "fake-srm-calls.log").unlink()
 
-    def test_path_move_is_change(self) -> None:
-        before = self.entry()
-        after = GameEntry(before.id, before.system, before.title, before.source_path,
-                          before.relative_rom_path, "/new/roms/ps2/Game.chd")
-        plan = build_plan(self.manifest([after]), self.manifest([before]))
-        self.assertEqual(len(plan.changes), 1)
-        self.assertFalse(plan.additions or plan.removals)
+    def test_add_game_keeps_existing_and_only_touches_that_console(self) -> None:
+        self.add(("snes", "Third.sfc"))
+        report = self.update()
+        self.assertTrue(report.ok, report.summary())
+        self.assertEqual(len(report.added), 1)
+        self.assertIn("1 spill ble lagt til", report.summary())
+        self.assertEqual(self.env.names(), ["Firefox", "Multi", "Other Game", "Super Game", "Third"])
+        after = {field(s, "AppName"): field(s, "appid") for s in self.env.shortcuts()}
+        for name in ("Super Game", "Other Game", "Multi", "Firefox"):
+            self.assertEqual(after[name], self.appids_before[name])
+        calls = self.env.srm_calls()
+        self.assertEqual(calls, [{"action": "add", "enabled": [f"{OWNED_PARSER_PREFIX}snes"]}])
+        # Our parsers are switched back on afterwards, EmuDeck's stay as they were.
+        parsers = self.env.parsers()
+        self.assertTrue(all(not p["disabled"] for p in parsers if p["parserId"].startswith(OWNED_PARSER_PREFIX)))
+        emudeck = [p for p in parsers if p["parserId"].startswith("emudeck-") and not p["parserId"].startswith(OWNED_PARSER_PREFIX)]
+        self.assertTrue(emudeck and all(p["disabled"] for p in emudeck))
+        self.assertFalse(next(p for p in parsers if p["parserId"] == "other")["disabled"])
 
-    def test_unhealthy_system_blocks_removal(self) -> None:
-        plan = build_plan(self.manifest([], safe=False), self.manifest([self.entry()]))
-        self.assertEqual(len(plan.blocked_removals), 1)
-        self.assertEqual(plan.removals, [])
+    def test_new_console_gets_its_own_parser(self) -> None:
+        self.add(("gba", "Mini.gba"))
+        report = self.update()
+        self.assertEqual(len(report.added), 1)
+        owned = [p for p in self.env.parsers() if p["parserId"] == f"{OWNED_PARSER_PREFIX}gba"]
+        self.assertEqual(len(owned), 1)
+        self.assertEqual(owned[0]["configTitle"], "ES-DE Favorites Sync - Nintendo GBA")
+        self.assertIn("Mini", self.env.names())
 
-    def test_healthy_unfavorite_allows_removal(self) -> None:
-        plan = build_plan(self.manifest([], safe=True), self.manifest([self.entry()]))
-        self.assertEqual(len(plan.removals), 1)
+    def test_renamed_game_keeps_its_name_and_is_not_duplicated(self) -> None:
+        config, library = self.library()
+        load_games(config, library)
+        shortcuts = self.env.shortcuts()
+        for item in shortcuts:
+            if field(item, "AppName") == "Super Game":
+                set_field(item, "AppName", "Mitt Supre Spill")
+        write_shortcuts(self.env.vdf, shortcuts)
+        self.add(("snes", "Third.sfc"))
+        self.update()
+        self.assertEqual(self.env.names(), ["Firefox", "Mitt Supre Spill", "Multi", "Other Game", "Third"])
+        renamed = next(s for s in self.env.shortcuts() if field(s, "AppName") == "Mitt Supre Spill")
+        self.assertEqual(field(renamed, "appid"), self.appids_before["Super Game"])
+
+    def test_launch_options_changed_by_hand_are_kept_by_update(self) -> None:
+        config, library = self.library()
+        load_games(config, library)
+        shortcuts = self.env.shortcuts()
+        for item in shortcuts:
+            if field(item, "AppName") == "Other Game":
+                set_field(item, "LaunchOptions", "--my-own-flag")
+        write_shortcuts(self.env.vdf, shortcuts)
+        self.add(("snes", "Third.sfc"))
+        self.update()
+        other = [s for s in self.env.shortcuts() if field(s, "AppName") == "Other Game"]
+        self.assertEqual(len(other), 1)
+        self.assertEqual(field(other[0], "LaunchOptions"), "--my-own-flag")
+
+    def test_remove_game(self) -> None:
+        self.remove(("snes", "Other Game (Europe).smc"))
+        report = self.update()
+        self.assertTrue(report.ok, report.summary())
+        self.assertEqual(report.removed, ["Other Game (Europe).smc (snes)"])
+        self.assertEqual(self.env.names(), ["Firefox", "Multi", "Super Game"])
+        config, library = self.library()
+        self.assertEqual(len(load_games(config, library)), 2)
+
+    def test_remove_last_game_of_console_uses_srm_remove(self) -> None:
+        self.remove(("psx", "Multi (USA).m3u"))
+        report = self.update()
+        self.assertTrue(report.ok, report.summary())
+        self.assertEqual(self.env.names(), ["Firefox", "Other Game", "Super Game"])
+        self.assertEqual(self.env.srm_calls(), [{"action": "remove", "enabled": [f"{OWNED_PARSER_PREFIX}psx"]}])
+        config = self.env.config()
+        self.assertEqual(read_manifest(config, "psx"), [])
+        self.assertTrue(any(p["parserId"] == f"{OWNED_PARSER_PREFIX}psx" for p in self.env.parsers()))
+
+    def test_renamed_game_can_be_removed(self) -> None:
+        config, library = self.library()
+        load_games(config, library)
+        shortcuts = self.env.shortcuts()
+        for item in shortcuts:
+            if field(item, "AppName") == "Multi":
+                set_field(item, "AppName", "Flerdisk")
+        write_shortcuts(self.env.vdf, shortcuts)
+        self.remove(("psx", "Multi (USA).m3u"))
+        report = self.update()
+        self.assertTrue(report.ok, report.summary())
+        self.assertEqual(self.env.names(), ["Firefox", "Other Game", "Super Game"])
+
+    def test_add_and_undo_before_update_changes_nothing(self) -> None:
+        self.add(("snes", "Third.sfc"))
+        self.remove(("snes", "Third.sfc"))
+        report = self.update()
+        self.assertTrue(report.nothing_to_do)
+        self.assertEqual(self.env.srm_calls(), [])
+
+    def test_console_without_parser_is_refused(self) -> None:
+        self.add(("n64", "NoParser.z64"))
+        report = self.update()
+        self.assertEqual(len(report.add_failed), 1)
+        self.assertEqual(self.env.srm_calls(), [])
+        config, library = self.library()
+        self.assertFalse(any(r.system == "n64" for r in load_games(config, library)))
+
+    def test_delete_disabled_shortcuts_blocks(self) -> None:
+        settings = json.loads((self.env.user_data / "userSettings.json").read_text(encoding="utf-8"))
+        settings["previewSettings"]["deleteDisabledShortcuts"] = True
+        (self.env.user_data / "userSettings.json").write_text(json.dumps(settings), encoding="utf-8")
+        self.add(("snes", "Third.sfc"))
+        report = run(self.env.config(), UPDATE)
+        self.assertIn("Delete disabled shortcuts", report.error)
+        self.assertEqual(self.env.srm_calls(), [])
+
+    def test_backup_is_made(self) -> None:
+        self.add(("snes", "Third.sfc"))
+        report = self.update()
+        backup_dir = Path(report.backup_dir)
+        self.assertTrue((backup_dir / "steam/12345/shortcuts.vdf").is_file())
+        self.assertTrue((backup_dir / "srm/userConfigurations.json").is_file())
+
+
+class FixTests(Base):
+    def setUp(self) -> None:
+        super().setUp()
+        self.env.old_install({"snes": [("Super Game", "Super Game (USA).sfc"), ("Other Game", "Other Game (Europe).smc")]})
+
+    def _switch_snes_core(self) -> None:
+        parsers = self.env.parsers()
+        for parser in parsers:
+            if parser["parserId"].startswith("emudeck-snes-"):
+                parser["executableArgs"] = '-L ${racores}${/}bsnes_libretro.so "${filePath}"'
+        self.env.write_parsers(parsers)
+
+    def test_fix_updates_launch_options_and_keeps_names(self) -> None:
+        config, library = self.library()
+        load_games(config, library)
+        shortcuts = self.env.shortcuts()
+        for item in shortcuts:
+            if field(item, "AppName") == "Other Game":
+                set_field(item, "AppName", "Eget navn")
+        write_shortcuts(self.env.vdf, shortcuts)
+        self._switch_snes_core()
+        self.add(("snes", "Third.sfc"))  # pending, must not be added by Fiks
+        report = self.update(FIX)
+        self.assertTrue(report.ok, report.summary())
+        self.assertEqual(len(report.fixed), 2)
+        self.assertEqual(self.env.names(), ["Eget navn", "Firefox", "Super Game"])
+        for item in self.env.shortcuts():
+            if field(item, "AppName") != "Firefox":
+                self.assertIn("bsnes_libretro.so", field(item, "Exe"))
+        records = load_games(*self.library())
+        self.assertEqual(sorted(r.status for r in records), [APPLIED, APPLIED, PENDING_ADD])
+
+    def test_fix_without_changes_keeps_appids(self) -> None:
+        before = {field(s, "AppName"): field(s, "appid") for s in self.env.shortcuts()}
+        report = self.update(FIX)
+        self.assertEqual(report.fixed, [])
+        after = {field(s, "AppName"): field(s, "appid") for s in self.env.shortcuts()}
+        self.assertEqual(before, after)
+
+    def test_parser_preference_is_used(self) -> None:
+        parsers = self.env.parsers()
+        parsers.append(glob_parser("snes", "Nintendo SNES - bsnes standalone", "/usr/bin/bsnes", '"${filePath}"', ".sfc|.smc"))
+        self.env.write_parsers(parsers)
+        config = self.env.config()
+        save_parser_preference(config, "snes", "bsnes standalone")
+        self.update(FIX)
+        exes = {field(s, "Exe") for s in self.env.shortcuts() if field(s, "AppName") != "Firefox"}
+        self.assertTrue(all(exe.startswith('"/usr/bin/bsnes"') for exe in exes), exes)
+
+
+class EntryTests(unittest.TestCase):
+    def test_ps2_m3u_is_refused(self) -> None:
+        parser = glob_parser("ps2", "PCSX2", "/usr/bin/pcsx2", '"${filePath}"', ".chd")
+        result = build_entry("Big", "/roms/ps2/Big.m3u/Big.m3u", "ps2", parser, {})
+        self.assertIsNone(result.entry)
+        self.assertIn("m3u", result.problem)
+
+    def test_unresolved_emulator_is_refused(self) -> None:
+        parser = glob_parser("gba", "mGBA", "${retroarchpath}", '"${filePath}"', ".gba")
+        result = build_entry("Mini", "/roms/gba/Mini.gba", "gba", parser, {"retroarchPath": ""})
+        self.assertIsNone(result.entry)
+        self.assertIn("retroarchPath", result.problem)
+
+    def test_entry_resolves_variables(self) -> None:
+        parser = glob_parser("snes", "Snes9x", "${retroarchpath}", '-L ${racores}${/}snes9x_libretro.so "${filePath}"', ".sfc")
+        result = build_entry("Game", "/roms/snes/Game.sfc", "snes", parser,
+                             {"retroarchPath": "/usr/bin/retroarch", "raCoresDirectory": "/cores"})
+        self.assertEqual(result.entry, {
+            "title": "Game", "target": "/usr/bin/retroarch", "startIn": "",
+            "launchOptions": '-L /cores/snes9x_libretro.so "/roms/snes/Game.sfc"', "appendArgsToExecutable": True,
+        })
+
+
+class VdfTests(unittest.TestCase):
+    def test_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shortcuts.vdf"
+            shortcuts = [{"appid": 3000000000, "AppName": "Ø Spill", "Exe": '"/x"', "tags": {"0": "A", "1": "B"}}]
+            write_shortcuts(path, shortcuts)
+            self.assertEqual(read_shortcuts(path), shortcuts)
+            self.assertTrue(path.read_bytes().endswith(b"\x08\x08"))
 
 
 class CliTests(unittest.TestCase):
-    def test_sync_is_registered(self) -> None:
-        with self.assertRaises(SystemExit) as raised:
-            cli_main(["sync", "--help"])
-        self.assertEqual(raised.exception.code, 0)
-
-    def test_autosync_status_is_registered(self) -> None:
-        with self.assertRaises(SystemExit) as raised:
-            cli_main(["autosync-status", "--help"])
-        self.assertEqual(raised.exception.code, 0)
-
-    def test_esde_closed_is_registered(self) -> None:
-        with self.assertRaises(SystemExit) as raised:
-            cli_main(["esde-closed", "--help"])
-        self.assertEqual(raised.exception.code, 0)
-
-    def test_steam_import_now_is_registered(self) -> None:
-        with self.assertRaises(SystemExit) as raised:
-            cli_main(["steam-import-now", "--help"])
-        self.assertEqual(raised.exception.code, 0)
-
-    def test_srm_add_now_is_registered(self) -> None:
-        with self.assertRaises(SystemExit) as raised:
-            cli_main(["srm-add-now", "--help"])
-        self.assertEqual(raised.exception.code, 0)
-
-    def test_srm_remove_now_is_registered(self) -> None:
-        with self.assertRaises(SystemExit) as raised:
-            cli_main(["srm-remove-now", "--help"])
-        self.assertEqual(raised.exception.code, 0)
-
-    def test_set_srm_path_is_registered(self) -> None:
-        with self.assertRaises(SystemExit) as raised:
-            cli_main(["set-srm-path", "--help"])
-        self.assertEqual(raised.exception.code, 0)
-
-    def test_list_favorites_is_registered(self) -> None:
-        with self.assertRaises(SystemExit) as raised:
-            cli_main(["list-favorites", "--help"])
-        self.assertEqual(raised.exception.code, 0)
-
-    def test_reset_is_registered(self) -> None:
-        with self.assertRaises(SystemExit) as raised:
-            cli_main(["reset", "--help"])
-        self.assertEqual(raised.exception.code, 0)
-
-    def test_set_parser_preference_is_registered(self) -> None:
-        with self.assertRaises(SystemExit) as raised:
-            cli_main(["set-parser-preference", "--help"])
-        self.assertEqual(raised.exception.code, 0)
-
-    def test_autosync_now_summary_flag_is_registered(self) -> None:
-        with self.assertRaises(SystemExit) as raised:
-            cli_main(["autosync-now", "--help"])
-        self.assertEqual(raised.exception.code, 0)
-
-    def test_autosync_summary_reports_steam_running(self) -> None:
-        buffer = io.StringIO()
-        with contextlib.redirect_stdout(buffer):
-            _print_autosync_summary({"reason": "Steam is running", "state": {"favorites": [{}]}})
-        self.assertIn("Steam kjører", buffer.getvalue())
-
-    def test_autosync_summary_reports_synced_count(self) -> None:
-        buffer = io.StringIO()
-        with contextlib.redirect_stdout(buffer):
-            _print_autosync_summary({"synced": True, "state": {"favorites": [{}, {}]}})
-        self.assertIn("Ferdig", buffer.getvalue())
-        self.assertIn("2", buffer.getvalue())
-
-    def test_autosync_summary_reports_error(self) -> None:
-        buffer = io.StringIO()
-        with contextlib.redirect_stdout(buffer):
-            _print_autosync_summary({"synced": False, "state": {"favorites": [], "last_error": "SRM feilet"}})
-        self.assertIn("Kunne ikke oppdatere", buffer.getvalue())
-        self.assertIn("SRM feilet", buffer.getvalue())
+    def test_legacy_command_explains_restart(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = cli.main(["autosync-now", "--summary"])
+        self.assertEqual(code, 0)
+        self.assertIn("start programmet på nytt", output.getvalue())
 
 
 if __name__ == "__main__":

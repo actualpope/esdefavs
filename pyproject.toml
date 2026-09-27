@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "emudeck-favorites-sync"
-version = "0.7.5"
-description = "Safe ES-DE favorites scanner and Steam sync planner for EmuDeck"
+version = "1.0.0"
+description = "Add games from the EmuDeck ROM folder to Steam through Steam ROM Manager"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "EmuDeck Favorites Sync contributors"}]

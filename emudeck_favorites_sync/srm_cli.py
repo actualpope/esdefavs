@@ -1,7 +1,7 @@
+"""Run the Steam ROM Manager command line for some of our own parsers."""
+
 from __future__ import annotations
 
-import json
-import os
 import shutil
 import stat
 import subprocess
@@ -10,34 +10,24 @@ from pathlib import Path
 from typing import Any
 
 from .config import AppConfig
-from .models import Diagnostic
-from .srm_apply import OWNED_PARSER_PREFIX, _write_json_atomic
+from .srm import owned_system, parser_file
+from .util import read_json, write_json_atomic
 
 
 @dataclass
 class SrmCliResult:
     ok: bool
-    attempted: bool = False
-    appimage: str = ""
+    action: str = ""
+    systems: list[str] = field(default_factory=list)
+    app: str = ""
     command: list[str] = field(default_factory=list)
     stdout: str = ""
     stderr: str = ""
     returncode: int | None = None
-    diagnostics: list[Diagnostic] = field(default_factory=list)
-    searched: list[str] = field(default_factory=list)
+    error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "ok": self.ok,
-            "attempted": self.attempted,
-            "appimage": self.appimage,
-            "command": self.command,
-            "stdout": self.stdout,
-            "stderr": self.stderr,
-            "returncode": self.returncode,
-            "diagnostics": [item.to_dict() for item in self.diagnostics],
-            "searched": self.searched,
-        }
+        return dict(self.__dict__)
 
 
 def srm_override_path(config: AppConfig) -> Path:
@@ -53,10 +43,8 @@ def set_srm_app_path(config: AppConfig, path: str) -> Path:
 
 def _read_srm_override(config: AppConfig) -> Path | None:
     path = srm_override_path(config)
-    if not path.is_file():
-        return None
     try:
-        value = path.read_text(encoding="utf-8").strip()
+        value = path.read_text(encoding="utf-8").strip() if path.is_file() else ""
     except OSError:
         return None
     return Path(value).expanduser() if value else None
@@ -110,138 +98,99 @@ def srm_appimage_candidates(config: AppConfig) -> list[Path]:
     unique: list[Path] = []
     seen: set[str] = set()
     for candidate in candidates:
-        key = str(candidate)
-        if key not in seen:
-            seen.add(key)
+        if str(candidate) not in seen:
+            seen.add(str(candidate))
             unique.append(candidate)
     return unique
 
 
-def find_srm_appimage(config: AppConfig) -> Path | None:
-    return next((path for path in srm_appimage_candidates(config) if path.is_file()), None)
-
-
-def _srm_command(config: AppConfig, action: str) -> tuple[list[str] | None, str, list[str]]:
-    candidates = srm_appimage_candidates(config)
-    appimage = next((path for path in candidates if path.is_file()), None)
+def srm_command(config: AppConfig) -> tuple[list[str] | None, str]:
+    """The command that starts SRM (without the action), and a label for it."""
+    appimage = next((path for path in srm_appimage_candidates(config) if path.is_file()), None)
     if appimage:
-        return [str(appimage), action], str(appimage), [str(path) for path in candidates]
+        return [str(appimage)], str(appimage)
     flatpak = shutil.which("flatpak")
-    if flatpak:
-        return [flatpak, "run", "com.steamgriddb.steam-rom-manager", action], "flatpak:com.steamgriddb.steam-rom-manager", [str(path) for path in candidates]
+    flatpak_installed = any(
+        (root / "app/com.steamgriddb.steam-rom-manager").exists()
+        for root in (Path("/var/lib/flatpak"), config.home / ".local/share/flatpak")
+    )
+    if flatpak and flatpak_installed:
+        return [flatpak, "run", "com.steamgriddb.steam-rom-manager"], "flatpak: com.steamgriddb.steam-rom-manager"
     command = shutil.which("steam-rom-manager") or shutil.which("Steam-ROM-Manager")
     if command:
-        return [command, action], command, [str(path) for path in candidates]
-    return None, "", [str(path) for path in candidates]
-
-
-def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+        return [command], command
+    return None, ""
 
 
 def _make_executable(path: Path) -> None:
     try:
-        mode = path.stat().st_mode
-        path.chmod(mode | stat.S_IXUSR)
+        path.chmod(path.stat().st_mode | stat.S_IXUSR)
     except OSError:
         pass
 
 
-def _run_srm_owned(config: AppConfig, *, action: str, steam_running: bool | None, timeout_seconds: int = 180) -> SrmCliResult:
-    result = SrmCliResult(ok=False)
-    if steam_running is True:
-        result.diagnostics.append(Diagnostic("error", "STEAM_RUNNING", f"Close Steam completely before SRM {action}."))
-        return result
+def run_srm(config: AppConfig, action: str, systems: list[str], *, timeout_seconds: int = 600) -> SrmCliResult:
+    """Run ``srm <action>`` with only our parsers for ``systems`` enabled.
 
-    command, app_label, searched = _srm_command(config, action)
-    result.searched = searched
+    Every other parser is temporarily disabled so SRM leaves its games alone, and
+    the parser file is restored exactly afterwards. Steam must be closed.
+    """
+    result = SrmCliResult(ok=False, action=action, systems=sorted(systems))
+    command, label = srm_command(config)
     if command is None:
-        result.diagnostics.append(Diagnostic(
-            "error",
-            "SRM_APP_NOT_FOUND",
-            "Could not find Steam ROM Manager. Use the GUI option 'Velg SRM AppImage' if SRM is installed somewhere else.",
-        ))
+        result.error = "Fant ikke Steam ROM Manager. Velg SRM AppImage under «SRM-oppsett»."
         return result
-    result.appimage = app_label
+    result.app = label
 
-    parser_file = config.home / ".config/steam-rom-manager/userData/userConfigurations.json"
-    if not parser_file.is_file():
-        result.diagnostics.append(Diagnostic("error", "SRM_CONFIG_NOT_FOUND", f"Missing {parser_file}", path=str(parser_file)))
-        return result
-
-    try:
-        original = _read_json(parser_file)
-    except (OSError, ValueError, TypeError) as error:
-        result.diagnostics.append(Diagnostic("error", "SRM_CONFIG_READ_FAILED", str(error), path=str(parser_file)))
-        return result
+    path = parser_file(config)
+    original = read_json(path)
     if not isinstance(original, list):
-        result.diagnostics.append(Diagnostic("error", "SRM_CONFIG_SCHEMA_UNEXPECTED", "SRM parser config was not a list.", path=str(parser_file)))
+        result.error = f"Kunne ikke lese SRM-parserne i {path}."
         return result
-
-    owned_count = sum(
-        1 for item in original
-        if isinstance(item, dict) and str(item.get("parserId", "")).startswith(OWNED_PARSER_PREFIX)
-    )
-    if owned_count == 0 and action == "remove":
-        result.ok = True
-        return result
-    if owned_count == 0:
-        result.diagnostics.append(Diagnostic("error", "OWNED_PARSERS_NOT_FOUND", "No ES-DE Favorites Sync parsers exist yet."))
-        return result
-
+    wanted = set(systems)
     modified: list[Any] = []
+    enabled = 0
     for item in original:
         if not isinstance(item, dict):
             modified.append(item)
             continue
         copy = dict(item)
-        is_owned = str(copy.get("parserId", "")).startswith(OWNED_PARSER_PREFIX)
-        copy["disabled"] = not is_owned
+        is_wanted = owned_system(copy) in wanted
+        copy["disabled"] = not is_wanted
+        enabled += is_wanted
         modified.append(copy)
+    if enabled == 0:
+        result.error = "Ingen av våre SRM-parsere passet til konsollene som skulle oppdateres."
+        return result
 
-    if command and command[0].endswith(".AppImage"):
+    if command[0].casefold().endswith(".appimage"):
         _make_executable(Path(command[0]))
-    result.command = command
-    result.attempted = True
+    result.command = [*command, action]
     try:
-        _write_json_atomic(parser_file, modified)
+        write_json_atomic(path, modified)
         completed = subprocess.run(
-            command,
+            result.command,
             cwd=str(config.home),
             text=True,
             capture_output=True,
             timeout=timeout_seconds,
             check=False,
         )
-        result.stdout = completed.stdout.strip()
-        result.stderr = completed.stderr.strip()
+        result.stdout = completed.stdout.strip()[-20000:]
+        result.stderr = completed.stderr.strip()[-20000:]
         result.returncode = completed.returncode
         if completed.returncode == 0:
             result.ok = True
         else:
-            result.diagnostics.append(Diagnostic(
-                "error",
-                f"SRM_{action.upper()}_FAILED",
-                f"Steam ROM Manager {action} failed with exit code {completed.returncode}.",
-            ))
-    except subprocess.TimeoutExpired as error:
-        result.stdout = (error.stdout or "").strip() if isinstance(error.stdout, str) else ""
-        result.stderr = (error.stderr or "").strip() if isinstance(error.stderr, str) else ""
-        result.diagnostics.append(Diagnostic("error", f"SRM_{action.upper()}_TIMEOUT", f"Steam ROM Manager {action} timed out."))
+            result.error = f"Steam ROM Manager {action} feilet (kode {completed.returncode})."
+    except subprocess.TimeoutExpired:
+        result.error = f"Steam ROM Manager {action} brukte for lang tid og ble stoppet."
     except OSError as error:
-        result.diagnostics.append(Diagnostic("error", f"SRM_{action.upper()}_START_FAILED", str(error)))
+        result.error = f"Kunne ikke starte Steam ROM Manager: {error}"
     finally:
         try:
-            _write_json_atomic(parser_file, original)
+            write_json_atomic(path, original)
         except OSError as error:
             result.ok = False
-            result.diagnostics.append(Diagnostic("error", "SRM_CONFIG_RESTORE_FAILED", str(error), path=str(parser_file)))
+            result.error = f"Kunne ikke sette tilbake SRM-parserne: {error}"
     return result
-
-
-def run_srm_add_owned(config: AppConfig, *, steam_running: bool | None, timeout_seconds: int = 180) -> SrmCliResult:
-    return _run_srm_owned(config, action="add", steam_running=steam_running, timeout_seconds=timeout_seconds)
-
-
-def run_srm_remove_owned(config: AppConfig, *, steam_running: bool | None, timeout_seconds: int = 180) -> SrmCliResult:
-    return _run_srm_owned(config, action="remove", steam_running=steam_running, timeout_seconds=timeout_seconds)

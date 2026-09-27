@@ -1,185 +1,65 @@
-# EmuDeck Favorites Sync 0.7.5
+# EmuDeck Favorites Sync 1.0
 
-Et lite Steam Deck-program som syncer ES-DE-favoritter til Steam.
+Et lite Steam Deck-program for å legge spill fra EmuDeck-rom-mappa inn i Steam via Steam ROM Manager (SRM). Det brukes ikke lenger ES-DE-favoritter; alt velges i programvinduet.
 
-Når du trykker `Oppdater ES-DE favoritter` i kontrollpanelet, gjør programmet tre ting:
+## Slik ser det ut
 
-1. Leser favoritter fra ES-DE `gamelist.xml`.
-2. Lager/oppdaterer egne SRM Manual-parsere med navn som `ES-DE Favorites Sync - ...`.
-3. Hvis Steam er lukket, kjører det Steam ROM Manager `remove` og deretter `add` for våre parsere.
+- **ROMS** (venstre): alle spill i rom-mappa, med konsoll (mappenavnet) og filnavn, sortert etter konsoll og så alfabetisk. Knappen **Velg rom-mappe …** bytter mappe.
+- **SRM** (høyre): spillene som ligger i Steam via våre egne SRM-parsere (`ES-DE Favorites Sync - …`, én per konsoll). Knappen **SRM-oppsett …** viser om SRM er riktig koblet, og hvilken emulator hver konsoll bruker.
+- **→ / ←**: flytter valgte spill mellom listene (også dobbeltklikk). Ingen filer flyttes; det er bare et valg. Endringer vises som «ny» (grønn) eller «fjernes» (rød) til du trykker Oppdater.
+- **Oppdater**: lukker Steam, kjører SRM for konsollene som er endret, sier hvor mange spill som ble lagt til, og starter Steam igjen.
+- **Fiks**: oppdaterer startinnstillingene (emulator og argumenter) for alle spill i SRM-lista etter dagens oppsett. Legger ikke til og fjerner ikke spill. Navn du har endret i Steam beholdes.
+- **Oppdater program**: henter siste versjon fra GitHub.
 
-Programmet oppdaterer ikke Steam i bakgrunnen på egen hånd. Du må trykke `Oppdater ES-DE favoritter` selv hver gang du har endret favoritter i ES-DE.
+Kjør programmet i Desktop Mode. Steam lukkes mens Oppdater/Fiks pågår.
 
-Hvis EmuDeck er installert på SD-kort, leter programmet også etter SRM direkte under for eksempel:
+## Viktig å vite
 
-```text
-/run/media/deck/FF4Y7/Emulation/tools/
-```
+- Spill som lå i Steam fra tidligere versjoner blir hentet inn automatisk første gang og ligger urørt i Steam.
+- Et spill som flyttes ut og lagres, forsvinner fra Steam sammen med spilletid og bilder der.
+- Multi-disk-spill i en `Spill.m3u`-mappe vises som ett spill. For PS2 (PCSX2 støtter ikke `.m3u`) vises hver disk for seg.
+- Hvilken emulator et nytt spill får, bestemmes av konsollens vanlige EmuDeck-parser i SRM. Er det flere, velges den under **SRM-oppsett**.
+- Før hver endring tas sikkerhetskopi av SRM-oppsettet og Steams `shortcuts.vdf` i `~/.local/state/emudeck-favorites-sync/backups/`.
 
-## Installer uten git
+## Installer
 
-Du trenger ikke `git` på Steam Deck. Last ned ZIP fra GitHub én gang, installer, og bruk deretter kontrollpanelets oppdateringsknapp.
+Last ned ZIP én gang, og bruk deretter **Oppdater program** i vinduet.
 
-1. Åpne denne lenken i browser på Steam Deck:
-
-```text
-https://github.com/actualpope/esdefavs/archive/refs/heads/main.zip
-```
-
-2. Pakk ut ZIP-en, for eksempel i `Downloads`.
-3. Åpne den utpakkede mappen i Dolphin.
-4. Dobbeltklikk `EmuDeck Favorites Sync.desktop`.
-5. Hvis programmet spør om å installere: velg ja.
-
-Du kan også installere fra Konsole etter at ZIP-en er pakket ut:
+1. Last ned `https://github.com/actualpope/esdefavs/archive/refs/heads/main.zip` på Steam Deck og pakk den ut, for eksempel i `Downloads`.
+2. Åpne Konsole og kjør:
 
 ```bash
 cd ~/Downloads/esdefavs-main
 bash install.sh
 ```
 
-Etterpå åpner du kontrollpanelet herfra:
+3. Start **EmuDeck Favorites Sync** fra skrivebordet.
 
-```text
-~/.local/share/emudeck-favorites-sync/EmuDeck Favorites Sync.desktop
-~/Desktop/EmuDeck Favorites Sync.desktop
-```
+## Kommandolinje
 
-Du kan også åpne desktop-filen direkte fra mappen over i Dolphin.
-
-## Oppdater senere
-
-Når det kommer nye endringer på GitHub, kan du oppdatere fra kontrollpanelet:
-
-```text
-Oppdater program
-```
-
-Eller fra terminal:
+Vinduet er det vanlige. For feilsøking finnes også:
 
 ```bash
-bash ~/.local/share/emudeck-favorites-sync/update.sh
+~/.local/bin/emudeck-favorites-sync status   # rom-mappe, SRM og spill
+~/.local/bin/emudeck-favorites-sync report   # lagrer en feilsøkingsrapport
+~/.local/bin/emudeck-favorites-sync update   # samme som Oppdater
+~/.local/bin/emudeck-favorites-sync fix      # samme som Fiks
 ```
 
-Oppdatering fungerer både med og uten `git`. Hvis `git` ikke finnes, laster programmet ned ny GitHub-ZIP automatisk.
-
-Hvis du senere installerer fra en git-klone, kan du også kjøre:
-
-```bash
-bash update.sh
-```
-
-Etter installering ligger kontrollpanelet også her:
-
-```text
-~/.local/share/emudeck-favorites-sync/EmuDeck Favorites Sync.desktop
-```
-
-## Bruk
-
-Åpne `EmuDeck Favorites Sync.desktop`.
-
-Der får du en enkel meny:
-
-- **Oppdater ES-DE favoritter** — leser gjeldende favoritter fra ES-DE og synkroniserer dem til Steam via SRM, hvis Steam er lukket.
-- **Se ES-DE Favoritter** — viser en ren liste over hvilke spill som er favorittmerket akkurat nå. Endrer ingenting.
-- **Oppdater program** — henter siste versjon fra GitHub.
-- **Reset (fjern alt fra Steam/SRM)** — viser først nøyaktig hva som vil bli fjernet, ber om bekreftelse, og fjerner deretter alle `ES-DE Favorites Sync`-parsere, manifester og Steam-snarveier programmet har laget. Rører ikke ES-DE sine egne favoritter eller andre SRM-parsere. Bruk denne for å starte helt friskt, og trykk så `Oppdater ES-DE favoritter` for å bygge alt opp igjen rent.
-- **Feilsøking** — viser for hvert system med favoritter hvilken SRM-parser som ble brukt, hvilken kjørbar fil den løste til, og om flere parsere konkurrerte om samme system. Nyttig når et spill ikke starter riktig i Steam.
-
-Vanlig bruk er bare:
-
-1. Favorittmarker eller fjern favoritt på spill i ES-DE.
-2. Lukk Steam helt.
-3. Åpne kontrollpanelet og trykk `Oppdater ES-DE favoritter`.
-4. Start Steam igjen.
-
-Programmet kjører ikke i bakgrunnen og oppdager ikke endringer av seg selv — alt skjer når du trykker `Oppdater ES-DE favoritter`.
-
-## Hvordan "Oppdater ES-DE favoritter" fungerer
-
-- Trykk på knappen leser ES-DE sine gamelists på nytt hver gang, uansett om noe har endret seg siden sist.
-- Hvis favorittene dine er uendret siden forrige vellykkede synkronisering, og Steam-biblioteket fortsatt stemmer overens med det, gjør knappen ingenting mer enn å bekrefte at alt allerede er synkronisert. Steam/SRM blir ikke rørt i det hele tatt.
-- Hvis noe faktisk har endret seg (favoritter lagt til/fjernet, eller Steam-biblioteket har kommet ut av synk, for eksempel fordi en snarvei ble fjernet manuelt), gjør programmet en full ombygging:
-  - Hvis Steam kjører, blokkeres synkroniseringen og du får beskjed om å lukke Steam og prøve igjen.
-  - Når Steam er lukket, kjører programmet først SRM `remove` på eksisterende favorittsync-parsere.
-  - Deretter fjerner programmet gamle Steam-shortcuts som ikke lenger finnes i ES-DE favorites.
-  - Til slutt skriver programmet ny SRM-staging og kjører SRM `add` på dagens favoritter.
-  - Fjerning matcher SRM-shortcuts tolerant, slik at små forskjeller i anførselstegn og `LaunchOptions` ikke hindrer cleanup.
-  - Mens SRM `add` kjøres, aktiveres bare `ES-DE Favorites Sync`-parserne midlertidig; andre SRM-parsere settes tilbake slik de var etterpå.
-- Spillene legges både i en samlet `ES-DE Favorites`-collection og i konsollens vanlige SRM-collection.
-- Favorittsync-parserne blir liggende i SRM selv om en konsoll akkurat nå har null favoritter; manifestet blir bare tomt.
-
-## Hvis programmet ikke finner Steam ROM Manager
-
-Fra terminal:
-
-```bash
-~/.local/bin/emudeck-favorites-sync set-srm-path "/path/to/Steam-ROM-Manager.AppImage"
-```
-
-Programmet husker valget under:
-
-```text
-~/.local/state/emudeck-favorites-sync/srm-app-path.txt
-```
-
-Deretter kan du prøve `Oppdater ES-DE favoritter` igjen.
-
-## Sikkerhet
-
-- Programmet skriver ikke mens Steam kjører.
-- Programmet lager backup før SRM-konfig og Steam-shortcuts endres.
-- Eksisterende EmuDeck-parsere røres ikke.
-- Eksisterende Steam-shortcuts bevares.
-- Global SRM `nuke` brukes aldri.
-- Hvis `deleteDisabledShortcuts` er aktivert i SRM, blokkeres SRM-staging.
-
-## Terminalkommandoer hvis du trenger dem
-
-De to vanligste, som tilsvarer de to første knappene i kontrollpanelet:
-
-```bash
-~/.local/bin/emudeck-favorites-sync list-favorites
-~/.local/bin/emudeck-favorites-sync autosync-now --summary
-```
-
-Øvrige kommandoer, for feilsøking eller avansert bruk:
-
-```bash
-~/.local/bin/emudeck-favorites-sync autosync-status
-~/.local/bin/emudeck-favorites-sync srm-remove-now
-~/.local/bin/emudeck-favorites-sync srm-add-now
-~/.local/bin/emudeck-favorites-sync set-srm-path "/path/to/Steam-ROM-Manager.AppImage"
-~/.local/bin/emudeck-favorites-sync steam-import-now
-~/.local/bin/emudeck-favorites-sync reset            # forhåndsvisning, endrer ingenting
-~/.local/bin/emudeck-favorites-sync reset --confirm  # fjerner faktisk
-~/.local/bin/emudeck-favorites-sync set-parser-preference switch Eden  # tvungent valg når flere parsere konkurrerer
-~/.local/bin/emudeck-favorites-sync set-parser-preference switch       # fjerner preferansen igjen
-```
-
-Hvis "Feilsøking" viser at flere SRM-parsere konkurrerer om samme system (for eksempel flere emulatorer for Switch), kan du bruke `set-parser-preference` til å alltid velge den du vil ha, i stedet for å måtte fjerne de andre parserne i Steam ROM Manager selv.
-
-Programmet installeres uten bakgrunnstjeneste. `autosync-on`/`autosync-off` finnes fortsatt i CLI-en for den som selv vil eksperimentere med en bakgrunnstjeneste som oppdager endringer og kjører `esde-closed` automatisk, men dette er ikke standardoppsettet og vises ikke i kontrollpanelet.
-
-## Feilsøking
-
-State, logg og backups ligger under:
-
-```text
-~/.local/state/emudeck-favorites-sync
-```
-
-Autosync-loggen ligger her:
-
-```text
-~/.local/state/emudeck-favorites-sync/autosync.log
-```
+Logg fra siste SRM-kjøring: `~/.local/state/emudeck-favorites-sync/logs/last-run.txt`.
 
 ## Avinstaller
 
-Fra den utpakkede mappen:
+```bash
+bash ~/.local/share/emudeck-favorites-sync/uninstall.sh
+```
+
+Spillene i Steam og SRM blir ikke rørt.
+
+## Utvikling
 
 ```bash
-bash uninstall.sh
+python3 -m unittest discover -s tests -t .
 ```
+
+Testene bruker en liten SRM-etterligning (`tests/fake_srm.py`) som følger SRM sine regler for legg til, oppdatering og fjerning.
