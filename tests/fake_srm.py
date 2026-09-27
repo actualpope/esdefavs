@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from emudeck_favorites_sync.steam import field, read_shortcuts, set_field, tags, write_shortcuts  # noqa: E402
+from srm_sync.steam import field, read_shortcuts, set_field, tags, write_shortcuts  # noqa: E402
 
 
 def app_key(exe: str, title: str) -> int:

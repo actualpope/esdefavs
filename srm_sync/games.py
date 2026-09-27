@@ -66,10 +66,46 @@ def load_games(config: AppConfig, library: Library | None = None) -> list[GameRe
     """Our games. The first time, they are imported from the existing SRM setup."""
     data = read_json(games_path(config))
     if isinstance(data, dict) and isinstance(data.get("games"), list):
-        return [GameRecord.from_dict(item) for item in data["games"] if isinstance(item, dict) and "id" in item]
+        records = [GameRecord.from_dict(item) for item in data["games"] if isinstance(item, dict) and "id" in item]
+        if library is not None and relink_records(records, library):
+            save_games(config, records)
+        return records
     records = migrate(config, library)
     save_games(config, records)
     return records
+
+
+def relink_records(records: list[GameRecord], library: Library) -> bool:
+    """Point records whose stored id matches no ROM file at the file they actually launch.
+
+    Games from earlier versions can carry an id (console + path) that differs from
+    the scanned file, which would make them look missing and let the same file
+    also show up in ROMS. Returns True if anything changed.
+    """
+    games = library.by_id()
+    by_system: dict[str, list[tuple[str, RomGame]]] = {}
+    for game in library.games:
+        normalized = normalize_command(game.launch_path)
+        if normalized:
+            by_system.setdefault(game.system, []).append((normalized, game))
+    used = {record.id for record in records}
+    changed = False
+    for record in records:
+        if record.id in games or not record.entry:
+            continue
+        launch = normalize_command(record.entry.get("launchOptions"))
+        best: RomGame | None = None
+        for normalized, game in by_system.get(record.system, ()):
+            if normalized in launch and (best is None or len(normalized) > len(normalize_command(best.launch_path))):
+                best = game
+        if best is None or best.id in used:
+            continue
+        used.discard(record.id)
+        used.add(best.id)
+        record.id = best.id
+        record.rel_path = best.rel_path
+        changed = True
+    return changed
 
 
 # -------------------------------------------------------------------- migration
@@ -218,22 +254,42 @@ def discard_changes(records: list[GameRecord]) -> None:
             record.status = APPLIED
 
 
-def already_in_srm(records: list[GameRecord], game: RomGame) -> bool:
-    """True if an SRM record for this console already launches this exact ROM.
+class RecordIndex:
+    """Find the record for a ROM file: same id, or else a record that launches this exact file.
 
-    Normally a game's id (console + relative path) is enough to tell, but this
-    also catches the rare case where a stored record's id no longer matches a
-    freshly scanned game (for example a ROM file renamed after being added): a
-    game already covered by SRM should never also show up as available in ROMS.
+    Normally the id (console + relative path) is enough, but a game added by an
+    earlier version can have a stored id that no longer matches a freshly scanned
+    file (for example after a rename). Matching on the launch command as well
+    keeps such a game from showing up in both lists.
     """
-    normalized = normalize_command(game.launch_path)
-    if not normalized:
-        return False
-    return any(
-        record.system == game.system and record.in_steam and record.entry
-        and normalized in normalize_command(record.entry.get("launchOptions"))
-        for record in records
-    )
+
+    def __init__(self, records: list[GameRecord]) -> None:
+        self.by_id = {record.id: record for record in records}
+        self.by_system: dict[str, list[tuple[str, GameRecord]]] = {}
+        for record in records:
+            if record.entry:
+                launch = normalize_command(record.entry.get("launchOptions"))
+                self.by_system.setdefault(record.system, []).append((launch, record))
+
+    def find(self, game: RomGame, statuses: set[str]) -> GameRecord | None:
+        record = self.by_id.get(game.id)
+        if record is not None and record.status in statuses:
+            return record
+        normalized = normalize_command(game.launch_path)
+        if not normalized:
+            return None
+        for launch, candidate in self.by_system.get(game.system, ()):
+            if candidate.status in statuses and normalized in launch:
+                return candidate
+        return None
+
+
+def already_in_srm(records: list[GameRecord], game: RomGame) -> bool:
+    """True if a game that stays in SRM already launches this ROM file.
+
+    A game moved out («fjernes») does not count: it must show up in ROMS.
+    """
+    return RecordIndex(records).find(game, {APPLIED}) is not None
 
 
 # ------------------------------------------------------------ moving games

@@ -19,8 +19,11 @@ from .config import AppConfig
 from .util import read_json, write_json_atomic
 
 
+# Internal ids from when the program was called "EmuDeck Favorites Sync". SRM keeps
+# track of the games it added per parserId, so these must never change.
 OWNED_PARSER_PREFIX = "emudeck-favorites-sync:"
-OWNED_TITLE_PREFIX = "ES-DE Favorites Sync"
+OWNED_TITLE_PREFIX = "SRM Sync"
+OLD_TITLE_PREFIXES = ("ES-DE Favorites Sync",)
 FAVORITES_COLLECTION = "ES-DE Favorites"
 
 # Consoles whose standard EmuDeck emulator does not understand .m3u playlists
@@ -467,6 +470,12 @@ def _steam_categories_with_favorites(categories: Any) -> list[str]:
 
 
 def _owned_parser_fields(parser: dict[str, Any], system: str, manual_dir: Path) -> dict[str, Any]:
+    # Only the visible name follows the program's name; parserId stays the same so
+    # SRM still recognises the games it added earlier.
+    title = str(parser.get("configTitle") or "")
+    for old in OLD_TITLE_PREFIXES:
+        if title.startswith(old):
+            parser["configTitle"] = OWNED_TITLE_PREFIX + title[len(old):]
     parser["parserId"] = f"{OWNED_PARSER_PREFIX}{system}"
     parser["parserType"] = "Manual"
     parser["disabled"] = False

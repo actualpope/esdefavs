@@ -2,11 +2,15 @@
 set -euo pipefail
 
 SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_DIR="${HOME}/.local/share/emudeck-favorites-sync"
+INSTALL_DIR="${HOME}/.local/share/srm-sync"
 BIN_DIR="${HOME}/.local/bin"
 DESKTOP_DIR="${HOME}/Desktop"
-STATE_DIR="${HOME}/.local/state/emudeck-favorites-sync"
-VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$SOURCE_DIR/emudeck_favorites_sync/__init__.py")"
+STATE_DIR="${HOME}/.local/state/srm-sync"
+VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$SOURCE_DIR/srm_sync/__init__.py")"
+
+# The program was called "EmuDeck Favorites Sync" before 1.4.
+OLD_INSTALL_DIR="${HOME}/.local/share/emudeck-favorites-sync"
+OLD_STATE_DIR="${HOME}/.local/state/emudeck-favorites-sync"
 
 command -v python3 >/dev/null 2>&1 || {
   echo "Feil: Python 3 ble ikke funnet." >&2
@@ -21,36 +25,38 @@ if command -v systemctl >/dev/null 2>&1; then
         "${HOME}/.config/systemd/user/emudeck-favorites-sync.timer"
   systemctl --user daemon-reload >/dev/null 2>&1 || true
 fi
+
+# Keep the saved game list, settings and backups under the new name.
+if [[ -d "$OLD_STATE_DIR" && ! -L "$OLD_STATE_DIR" && ! -e "$STATE_DIR" ]]; then
+  mkdir -p "$(dirname "$STATE_DIR")"
+  mv "$OLD_STATE_DIR" "$STATE_DIR"
+fi
 rm -f "$STATE_DIR/autosync.json" "$STATE_DIR/autosync.log" "$STATE_DIR/last-srm-entries.json"
 
 # Build the new installation next to the old one and swap it in at the end, so
-# an older program window that is still running is not disturbed half-way.
+# a program window that is still running is not disturbed half-way.
 mkdir -p "$(dirname "$INSTALL_DIR")" "$BIN_DIR"
 STAGING="$(mktemp -d "${INSTALL_DIR}.new.XXXXXX")"
 trap 'rm -rf "$STAGING"' EXIT
-cp -R "$SOURCE_DIR/emudeck_favorites_sync" "$STAGING/"
-rm -rf "$STAGING/emudeck_favorites_sync/__pycache__"
+cp -R "$SOURCE_DIR/srm_sync" "$STAGING/"
+rm -rf "$STAGING/srm_sync/__pycache__"
 install -m 0644 "$SOURCE_DIR/pyproject.toml" "$STAGING/pyproject.toml"
-install -m 0644 "$SOURCE_DIR/assets/emudeck-favorites-sync.svg" "$STAGING/emudeck-favorites-sync.svg"
-install -m 0755 "$SOURCE_DIR/EmuDeck Favorites Sync.sh" "$STAGING/EmuDeck Favorites Sync.sh"
+install -m 0644 "$SOURCE_DIR/assets/srm-sync.svg" "$STAGING/srm-sync.svg"
+install -m 0755 "$SOURCE_DIR/SRM Sync.sh" "$STAGING/SRM Sync.sh"
 install -m 0755 "$SOURCE_DIR/update.sh" "$STAGING/update.sh"
 install -m 0755 "$SOURCE_DIR/uninstall.sh" "$STAGING/uninstall.sh"
-if [[ -d "$SOURCE_DIR/.git" ]]; then
-  # A git checkout: «Oppdater program» can then use git pull.
-  printf '%s\n' "$SOURCE_DIR" > "$STAGING/source-dir.txt"
-fi
 
-cat > "$STAGING/EmuDeck Favorites Sync.desktop" <<EOF
+cat > "$STAGING/SRM Sync.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=EmuDeck Favorites Sync
+Name=SRM Sync
 Comment=Legg spill fra rom-mappa inn i Steam via Steam ROM Manager
-Exec=bash "${INSTALL_DIR}/EmuDeck Favorites Sync.sh"
-Icon=${INSTALL_DIR}/emudeck-favorites-sync.svg
+Exec=bash "${INSTALL_DIR}/SRM Sync.sh"
+Icon=${INSTALL_DIR}/srm-sync.svg
 Terminal=false
 Categories=Game;Utility;
 EOF
-chmod 0644 "$STAGING/EmuDeck Favorites Sync.desktop"
+chmod 0644 "$STAGING/SRM Sync.desktop"
 
 if [[ -e "$INSTALL_DIR" ]]; then
   OLD="${INSTALL_DIR}.old.$$"
@@ -62,21 +68,22 @@ else
 fi
 trap - EXIT
 
-LAUNCHER_TMP="$(mktemp "${BIN_DIR}/.emudeck-favorites-sync.XXXXXX")"
+LAUNCHER_TMP="$(mktemp "${BIN_DIR}/.srm-sync.XXXXXX")"
 cat > "$LAUNCHER_TMP" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-export PYTHONPATH="${HOME}/.local/share/emudeck-favorites-sync${PYTHONPATH:+:${PYTHONPATH}}"
-exec python3 -m emudeck_favorites_sync.cli "$@"
+export PYTHONPATH="${HOME}/.local/share/srm-sync${PYTHONPATH:+:${PYTHONPATH}}"
+exec python3 -m srm_sync.cli "$@"
 EOF
 chmod 0755 "$LAUNCHER_TMP"
-mv -f "$LAUNCHER_TMP" "$BIN_DIR/emudeck-favorites-sync"
+mv -f "$LAUNCHER_TMP" "$BIN_DIR/srm-sync"
 
 if [[ -d "$DESKTOP_DIR" ]]; then
-  install -m 0755 "$INSTALL_DIR/EmuDeck Favorites Sync.desktop" "$DESKTOP_DIR/EmuDeck Favorites Sync.desktop"
+  install -m 0755 "$INSTALL_DIR/SRM Sync.desktop" "$DESKTOP_DIR/SRM Sync.desktop"
 fi
 
-echo "EmuDeck Favorites Sync ${VERSION} er installert."
-echo
-echo "VIKTIG: Lukk dette vinduet og programmet, og start «EmuDeck Favorites Sync»"
-echo "på nytt fra skrivebordet for å få den nye versjonen."
+# Remove the old name.
+rm -rf "$OLD_INSTALL_DIR"
+rm -f "$BIN_DIR/emudeck-favorites-sync" "$DESKTOP_DIR/EmuDeck Favorites Sync.desktop"
+
+echo "SRM Sync ${VERSION} er installert."

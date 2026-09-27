@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.0 — 2026-09-27
+
+- Programmet heter nå **SRM Sync**: vinduet, skrivebordssnarveien, kommandoen `srm-sync` og mappene `~/.local/share/srm-sync` og `~/.local/state/srm-sync`. Lagret spilliste, innstillinger og sikkerhetskopier flyttes automatisk over, og den gamle snarveien fjernes. Parserne i SRM heter nå «SRM Sync - …» (samme interne ID, så SRM kjenner fortsatt igjen spillene).
+- **Oppdater program** lukker programmet, oppdaterer, og åpner det igjen med beskjed om hvordan det gikk. Oppdateringen bruker nå alltid ZIP-nedlasting fra GitHub; git-veien er fjernet.
+- Retter feilmeldingen etter vellykket oppdatering (update.sh ga feilkode 1 til slutt fordi oppryddingen brukte en variabel som ikke fantes lenger).
+- Mappa `gamecube` hoppes over; GameCube-spill hører til `gc`. `gbc` (Game Boy Color) er ikke berørt.
+- Wii U viser bare `.wua`-filer.
+- Et spill som flyttes ut av SRM-lista vises nå i ROMS-lista (merket «fjernes»). Før kunne det bli borte fra begge listene.
+- Spill fra tidligere versjoner der lagret ID ikke stemte med rom-fila, kobles automatisk til riktig fil, så de ikke vises dobbelt eller som «rom mangler».
+- Spill du flytter, ligger øverst i listene til du trykker Lagre.
+
 ## 1.3.0 — 2026-09-27
 
 - Retter at PS3/Wii U-spill (mapper uten filtype, f.eks. `Game Name/PS3_GAME/USRDIR/EBOOT.BIN`) ikke lenger ble gjenkjent som ett spill. De ble i stedet lest gjennom, og filer inni dukket opp som egne "nye" spill i ROMS mens selve mappe-spillet fortsatt lå i SRM. Slike mapper vises nå igjen som ett spill, akkurat som i den gamle ES-DE-baserte versjonen.

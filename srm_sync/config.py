@@ -59,6 +59,25 @@ def _read_emudeck_candidates(home: Path) -> list[tuple[Path, str]]:
     return candidates
 
 
+def migrate_state_dir(old: Path, new: Path) -> None:
+    """Move saved state from the program's old name (EmuDeck Favorites Sync) to the new one."""
+    if not old.is_dir() or old.is_symlink():
+        return
+    try:
+        if not new.exists():
+            new.parent.mkdir(parents=True, exist_ok=True)
+            old.rename(new)
+            return
+        for child in list(old.iterdir()):
+            target = new / child.name
+            if not target.exists():
+                child.rename(target)
+        if not any(old.iterdir()):
+            old.rmdir()
+    except OSError:
+        pass
+
+
 def load_settings(state_dir: Path) -> dict:
     data = read_json(state_dir / "settings.json", {})
     return data if isinstance(data, dict) else {}
@@ -86,11 +105,11 @@ def discover_config(
     home_override: str | None = None,
 ) -> AppConfig:
     home = Path(home_override).expanduser() if home_override else Path.home()
-    state_dir = (
-        _expand_path(state_override, home)
-        if state_override
-        else home / ".local/state/emudeck-favorites-sync"
-    )
+    if state_override:
+        state_dir = _expand_path(state_override, home)
+    else:
+        state_dir = home / ".local/state/srm-sync"
+        migrate_state_dir(home / ".local/state/emudeck-favorites-sync", state_dir)
 
     candidates: list[tuple[Path, str]] = []
     if roms_override:

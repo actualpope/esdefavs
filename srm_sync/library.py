@@ -18,6 +18,8 @@ SKIP_SYSTEM_DIRS = {
     "desktop",
     "downloaded_media",
     "emulators",
+    # EmuDeck has both "gc" and "gamecube" for GameCube; "gc" is the real one.
+    "gamecube",
     "generic-applications",
     "media",
     "remoteplay",
@@ -36,10 +38,12 @@ PLAYLIST_EXTENSIONS = {".m3u", ".cue", ".gdi"}
 MAX_DEPTH = 4
 
 # EmuDeck systems where a ROM is a whole folder with no file extension in its own
-# name (e.g. "Game Name/PS3_GAME/USRDIR/EBOOT.BIN" or a Wii U title dump). Without
-# this, the folder itself is not recognised as a game and its inner files are
-# scanned individually instead.
-FOLDER_GAME_SYSTEMS = {"ps3", "wiiu"}
+# name (e.g. "Game Name/PS3_GAME/USRDIR/EBOOT.BIN"). Without this, the folder
+# itself is not recognised as a game and its inner files are scanned instead.
+FOLDER_GAME_SYSTEMS = {"ps3"}
+
+# Consoles where only these file types are games, whatever the SRM parser lists.
+EXTENSION_OVERRIDES = {"wiiu": {".wua"}}
 
 
 def logical_id(system: str, rel_path: str) -> str:
@@ -127,7 +131,9 @@ def _is_game_name(name: str, allowed: set[str] | None) -> bool:
 
 
 def scan_system(system_root: Path, system: str, allowed: set[str] | None) -> list[RomGame]:
-    if allowed is not None:
+    if system in EXTENSION_OVERRIDES:
+        allowed = set(EXTENSION_OVERRIDES[system])
+    elif allowed is not None:
         allowed = set(allowed)
         if system in M3U_UNSUPPORTED_SYSTEMS:
             allowed.discard(".m3u")

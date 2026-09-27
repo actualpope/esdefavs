@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import queue
 import subprocess
-import sys
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -20,7 +18,7 @@ from .games import (
     PENDING_ADD,
     PENDING_REMOVE,
     GameRecord,
-    already_in_srm,
+    RecordIndex,
     discard_changes,
     entry_template,
     load_games,
@@ -44,8 +42,22 @@ from .srm import (
 from .srm_cli import set_srm_app_path, srm_command
 
 
-TITLE = "EmuDeck Favorites Sync"
+TITLE = "SRM Sync"
 PROGRAM_DIR = Path(__file__).resolve().parent.parent
+
+# Runs detached while the window is closed: update, record the result, reopen.
+UPDATE_HELPER = """
+sleep 1
+mkdir -p "$(dirname "$2")" "$(dirname "$3")"
+bash "$1" >"$2" 2>&1
+echo $? >"$3"
+if [ -f "$4" ]; then exec bash "$4"; fi
+if [ -f "$5" ]; then exec bash "$5"; fi
+"""
+
+
+def update_result_path(config: AppConfig) -> Path:
+    return config.state_dir / "update-result.txt"
 
 
 def _sort_key(system: str, name: str) -> tuple[str, str]:
@@ -75,7 +87,7 @@ class App:
         self._build()
         self.search.trace_add("write", lambda *_: self.refresh())
         root.after(100, self._poll_events)
-        root.after(50, self.reload)
+        root.after(50, self._startup)
 
     # ------------------------------------------------------------------ layout
 
@@ -177,6 +189,10 @@ class App:
 
     # ------------------------------------------------------------------- data
 
+    def _startup(self) -> None:
+        self.reload()
+        self.report_update_result()
+
     def reload(self) -> None:
         self._set_status("Leser rom-mappa og SRM …", theme.ACCENT)
         self.root.update_idletasks()
@@ -194,18 +210,30 @@ class App:
 
     def refresh(self) -> None:
         needle = self.search.get().strip().casefold()
-        games = self.library.by_id()
         in_srm = {r.id for r in self.records if r.status in {APPLIED, PENDING_ADD}}
         removing = {r.id: r for r in self.records if r.status == PENDING_REMOVE}
+        index = RecordIndex(self.records)
 
         left_rows: list[tuple[str, str, str, str, str]] = []
+        found: set[str] = set()  # records whose ROM file exists
+        shown_removals: set[str] = set()
         for game in self.library.games:
-            if game.id in in_srm or already_in_srm(self.records, game):
+            if game.id in in_srm:
+                found.add(game.id)
                 continue
-            status, tag = ("●  fjernes", "remove") if game.id in removing else ("", "")
-            left_rows.append((game.id, game.system, game.filename, status, tag))
+            applied = index.find(game, {APPLIED})
+            if applied is not None:
+                found.add(applied.id)
+                continue
+            removal = index.find(game, {PENDING_REMOVE})
+            if removal is not None:
+                found.add(removal.id)
+                shown_removals.add(removal.id)
+                left_rows.append((game.id, game.system, game.filename, "●  fjernes", "remove"))
+            else:
+                left_rows.append((game.id, game.system, game.filename, "", ""))
         for record in removing.values():
-            if record.id not in games:
+            if record.id not in shown_removals:
                 left_rows.append((record.id, record.system, record.display_name, "●  fjernes", "remove"))
 
         right_rows: list[tuple[str, str, str, str, str]] = []
@@ -213,7 +241,7 @@ class App:
             if record.status == PENDING_ADD:
                 right_rows.append((record.id, record.system, record.display_name, "●  ny", "new"))
             elif record.status == APPLIED:
-                missing = not record.rel_path or record.id not in games
+                missing = record.id not in found
                 status, tag = ("●  rom mangler", "warn") if missing and not self.library.error else ("", "")
                 right_rows.append((record.id, record.system, record.display_name, status, tag))
 
@@ -249,7 +277,8 @@ class App:
         top = tree.yview()[0]
         selected = set(tree.selection())
         tree.delete(*tree.get_children())
-        rows.sort(key=lambda row: _sort_key(row[1], row[2]))
+        # Unsaved moves stay pinned at the top until «Lagre»; then they sort in normally.
+        rows.sort(key=lambda row: (row[4] not in {"new", "remove"}, *_sort_key(row[1], row[2])))
         for row_id, system, name, status, tag in rows:
             if needle and needle not in f"{system} {name}".casefold():
                 continue
@@ -276,10 +305,15 @@ class App:
             return
         games = self.library.by_id()
         refused: list[str] = []
+        index = RecordIndex(self.records)
         for item in self.roms_tree.selection():
             game = games.get(item)
-            if game is None or any(r.id == item and r.status == PENDING_REMOVE for r in self.records):
+            if game is None:
                 undo_remove(self.records, item)
+                continue
+            removal = index.find(game, {PENDING_REMOVE})
+            if removal is not None:
+                undo_remove(self.records, removal.id)
                 continue
             reason = self._addable(game)
             if reason:
@@ -411,33 +445,49 @@ class App:
     # --------------------------------------------------------- program update
 
     def update_program(self) -> None:
-        script = PROGRAM_DIR / "update.sh"
+        """Close, update in the background, and open again; the new window reports the result."""
+        if self.busy:
+            return
+        installed = self.config.home / ".local/share/srm-sync"
+        script = installed / "update.sh" if (installed / "update.sh").is_file() else PROGRAM_DIR / "update.sh"
         if not script.is_file():
             theme.info(self.root, "Oppdater program", f"Fant ikke oppdateringsskriptet:\n{script}", kind="error")
             return
-        if not theme.confirm(self.root, "Oppdater program", "Laste ned og installere siste versjon fra GitHub?",
-                             ok_text="Oppdater"):
+        log = self.config.state_dir / "logs" / "update.txt"
+        result = update_result_path(self.config)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        result.unlink(missing_ok=True)
+        subprocess.Popen(
+            ["bash", "-c", UPDATE_HELPER, "srm-sync-update", str(script), str(log), str(result),
+             str(installed / "SRM Sync.sh"), str(PROGRAM_DIR / "SRM Sync.sh")],
+            cwd=str(self.config.home),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        self.root.destroy()
+
+    def report_update_result(self) -> None:
+        """Say how the last «Oppdater program» went (shown once, after the restart)."""
+        result = update_result_path(self.config)
+        if not result.is_file():
             return
-        self._set_status("Henter siste versjon fra GitHub …", theme.ACCENT)
-
-        def work() -> object:
-            return subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=600)
-
-        def done(result: object) -> None:
-            if isinstance(result, subprocess.CompletedProcess) and result.returncode == 0:
-                if theme.confirm(self.root, "Oppdatert", "Programmet er oppdatert. Starte det på nytt nå?",
-                                 ok_text="Start på nytt", cancel_text="Senere"):
-                    os.execv(sys.executable, [sys.executable, "-m", "emudeck_favorites_sync.gui"])
-                self.refresh()
-                return
-            if isinstance(result, subprocess.CompletedProcess):
-                output = (result.stdout + "\n" + result.stderr).strip()
-            else:
-                output = repr(result)
-            self.refresh()
-            theme.info(self.root, "Oppdatering feilet", output, kind="error")
-
-        self._in_background(work, done)
+        try:
+            code = result.read_text(encoding="utf-8").strip()
+            result.unlink()
+        except OSError:
+            return
+        if code == "0":
+            theme.info(self.root, "Oppdatert", f"SRM Sync er oppdatert. Du har nå versjon {__version__}.", kind="success")
+            return
+        log = self.config.state_dir / "logs" / "update.txt"
+        try:
+            details = "\n".join(log.read_text(encoding="utf-8", errors="replace").strip().splitlines()[-25:])
+        except OSError:
+            details = ""
+        theme.info(self.root, "Oppdatering feilet",
+                   f"Programmet ble ikke oppdatert (du har fortsatt versjon {__version__}).\n\n{details}", kind="error")
 
     # ------------------------------------------------------------- SRM setup
 
@@ -620,7 +670,7 @@ class SrmSetup(tk.Toplevel):
 
 def main(argv: list[str] | None = None) -> int:
     config = discover_config()
-    root = tk.Tk(className="emudeck-favorites-sync")
+    root = tk.Tk(className="srm-sync")
     App(root, config)
     root.mainloop()
     return 0

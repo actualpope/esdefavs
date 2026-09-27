@@ -10,12 +10,14 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from emudeck_favorites_sync import cli
-from emudeck_favorites_sync.config import discover_config
-from emudeck_favorites_sync.engine import FIX, UPDATE, run
-from emudeck_favorites_sync.games import (
+from srm_sync import cli
+from srm_sync.config import discover_config
+from srm_sync.engine import FIX, UPDATE, run
+from srm_sync.games import (
     APPLIED,
     PENDING_ADD,
+    PENDING_REMOVE,
+    RecordIndex,
     already_in_srm,
     discard_changes,
     load_games,
@@ -24,8 +26,8 @@ from emudeck_favorites_sync.games import (
     pending_changes,
     save_games,
 )
-from emudeck_favorites_sync.library import RomGame, logical_id, scan_library
-from emudeck_favorites_sync.srm import (
+from srm_sync.library import RomGame, logical_id, scan_library
+from srm_sync.srm import (
     OWNED_PARSER_PREFIX,
     build_entry,
     load_srm,
@@ -36,8 +38,8 @@ from emudeck_favorites_sync.srm import (
     read_manifest,
     save_parser_preference,
 )
-from emudeck_favorites_sync.srm_cli import run_srm
-from emudeck_favorites_sync.steam import field, read_shortcuts, set_field, shortcut_appid, write_shortcuts
+from srm_sync.srm_cli import run_srm
+from srm_sync.steam import field, read_shortcuts, set_field, shortcut_appid, write_shortcuts
 
 
 FAKE_SRM = Path(__file__).resolve().parent / "fake_srm.py"
@@ -69,7 +71,7 @@ class Home:
         self.roms = self.home / "Emulation/roms"
         self.user_data = self.home / ".config/steam-rom-manager/userData"
         self.vdf = self.home / ".local/share/Steam/userdata/12345/config/shortcuts.vdf"
-        self.state = self.home / ".local/state/emudeck-favorites-sync"
+        self.state = self.home / ".local/state/srm-sync"
         self._roms()
         self._srm()
         write_shortcuts(self.vdf, [{
@@ -110,6 +112,12 @@ class Home:
         self.touch("ps2/Solo.chd")
         self.touch("gba/Mini.gba")
         self.touch("n64/NoParser.z64")
+        self.touch("gc/Cube Game.iso")
+        self.touch("gamecube/Cube Game.iso")
+        self.touch("gbc/Pocket.gbc")
+        self.touch("wiiu/Zelda.wua")
+        self.touch("wiiu/Other/code/app.rpx")
+        self.touch("wiiu/Loose.wud")
         self.touch("desktop/thing.desktop")
 
     def _srm(self) -> None:
@@ -228,6 +236,7 @@ class LibraryTests(Base):
             ("psx", "Multi (USA).m3u"), ("psx", "Two.m3u"), ("psx", "Single.cue"), ("psx", "Sub/Nested.chd"),
             ("ps2", "Big.m3u/Big (Disc 1).chd"), ("ps2", "Big.m3u/Big (Disc 2).chd"), ("ps2", "Solo.chd"),
             ("gba", "Mini.gba"), ("n64", "NoParser.z64"),
+            ("gc", "Cube Game.iso"), ("gbc", "Pocket.gbc"), ("wiiu", "Zelda.wua"),
         })
 
     def test_sorted_by_console_then_name(self) -> None:
@@ -318,7 +327,7 @@ class UpdateTests(Base):
         self.assertEqual(len(report.added), 1)
         owned = [p for p in self.env.parsers() if p["parserId"] == f"{OWNED_PARSER_PREFIX}gba"]
         self.assertEqual(len(owned), 1)
-        self.assertEqual(owned[0]["configTitle"], "ES-DE Favorites Sync - Nintendo GBA")
+        self.assertEqual(owned[0]["configTitle"], "SRM Sync - Nintendo GBA")
         self.assertIn("Mini", self.env.names())
 
     def test_renamed_game_keeps_its_name_and_is_not_duplicated(self) -> None:
@@ -437,9 +446,62 @@ class FolderGameTests(Base):
         self.assertIn("God of War 3", self.env.names())
 
 
+
+class NameAndStateTests(Base):
+    def test_old_parser_title_gets_new_name_but_same_id(self) -> None:
+        self.env.old_install({"snes": [("Super Game", "Super Game (USA).sfc")]})
+        parsers = self.env.parsers()
+        for parser in parsers:
+            if parser["parserId"] == f"{OWNED_PARSER_PREFIX}snes":
+                parser["configTitle"] = "ES-DE Favorites Sync - Nintendo SNES"
+        self.env.write_parsers(parsers)
+        self.add(("snes", "Third.sfc"))
+        self.update()
+        owned = next(p for p in self.env.parsers() if p["parserId"] == f"{OWNED_PARSER_PREFIX}snes")
+        self.assertEqual(owned["configTitle"], "SRM Sync - Nintendo SNES")
+
+    def test_state_moves_from_old_name(self) -> None:
+        old = self.env.home / ".local/state/emudeck-favorites-sync"
+        old.mkdir(parents=True)
+        (old / "games.json").write_text('{"version": 1, "games": []}', encoding="utf-8")
+        config = self.env.config()
+        self.assertEqual(config.state_dir, self.env.state)
+        self.assertTrue((self.env.state / "games.json").is_file())
+        self.assertFalse(old.exists())
+
+
+class RemovalShowsInRomsTests(Base):
+    def test_game_moved_out_is_shown_in_roms(self) -> None:
+        parsers = self.env.parsers()
+        parsers.append(glob_parser("gc", "Nintendo GameCube - Dolphin", "/usr/bin/dolphin-emu", '-e "${filePath}"', ".iso|.rvz"))
+        self.env.write_parsers(parsers)
+        self.env.old_install({"gc": [("Spyro", "Cube Game.iso")]})
+        config, library = self.library()
+        records = load_games(config, library)
+        game = next(g for g in library.games if g.system == "gc")
+        self.assertTrue(already_in_srm(records, game))
+        move_out_of_srm(records, records[0].id)
+        self.assertFalse(already_in_srm(records, game))
+        self.assertIs(RecordIndex(records).find(game, {PENDING_REMOVE}), records[0])
+
+    def test_stale_id_is_relinked_to_the_rom_file(self) -> None:
+        parsers = self.env.parsers()
+        parsers.append(glob_parser("gc", "Nintendo GameCube - Dolphin", "/usr/bin/dolphin-emu", '-e "${filePath}"', ".iso|.rvz"))
+        self.env.write_parsers(parsers)
+        self.env.old_install({"gc": [("Spyro", "Cube Game.iso")]})
+        config, library = self.library()
+        records = load_games(config, library)
+        records[0].id = "orphan:stale"
+        records[0].rel_path = ""
+        save_games(config, records)
+        records = load_games(config, library)
+        self.assertEqual(records[0].id, logical_id("gc", "Cube Game.iso"))
+        self.assertEqual(records[0].rel_path, "Cube Game.iso")
+
+
 class AlreadyInSrmTests(unittest.TestCase):
     def test_matches_by_launch_path_even_if_id_differs(self) -> None:
-        from emudeck_favorites_sync.games import GameRecord
+        from srm_sync.games import GameRecord
 
         game = RomGame(id="fresh-id", system="snes", rel_path="Game (Europe).sfc", title="Game",
                        launch_path="/roms/snes/Game (Europe).sfc")
@@ -448,7 +510,7 @@ class AlreadyInSrmTests(unittest.TestCase):
         self.assertTrue(already_in_srm([record], game))
 
     def test_no_match_for_different_console_or_path(self) -> None:
-        from emudeck_favorites_sync.games import GameRecord
+        from srm_sync.games import GameRecord
 
         game = RomGame(id="g", system="snes", rel_path="Other.sfc", title="Other", launch_path="/roms/snes/Other.sfc")
         record = GameRecord(id="r", system="snes", rel_path="Game.sfc", title="Game", status=APPLIED,
@@ -488,7 +550,7 @@ class NoParserTests(Base):
         parsers.append(parser)
         self.env.write_parsers(parsers)
         config = self.env.config()
-        from emudeck_favorites_sync.srm import parser_candidates
+        from srm_sync.srm import parser_candidates
 
         candidates = parser_candidates(load_srm(config).dict_parsers, "gc", config.roms_dir)
         self.assertEqual([p["configTitle"] for p, _ in candidates], ["Dolphin"])

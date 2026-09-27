@@ -17,13 +17,13 @@ LEGACY_COMMANDS = {
 }
 
 RESTART_MESSAGE = (
-    f"EmuDeck Favorites Sync er oppdatert til versjon {__version__}.\n"
+    f"SRM Sync er oppdatert til versjon {__version__}.\n"
     "Lukk dette vinduet og start programmet på nytt fra skrivebordet for å bruke den nye versjonen."
 )
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="emudeck-favorites-sync", description="Legg spill fra rom-mappa inn i Steam via Steam ROM Manager.")
+    parser = argparse.ArgumentParser(prog="srm-sync", description="Legg spill fra rom-mappa inn i Steam via Steam ROM Manager.")
     parser.add_argument("--roms-dir", help=argparse.SUPPRESS)
     parser.add_argument("--state-dir", help=argparse.SUPPRESS)
     parser.add_argument("--home", help=argparse.SUPPRESS)

@@ -9,7 +9,8 @@ if command -v systemctl >/dev/null 2>&1; then
   systemctl --user daemon-reload >/dev/null 2>&1 || true
 fi
 
-rm -rf "${HOME}/.local/share/emudeck-favorites-sync"
-rm -f "${HOME}/.local/bin/emudeck-favorites-sync" "${HOME}/Desktop/EmuDeck Favorites Sync.desktop"
+rm -rf "${HOME}/.local/share/srm-sync" "${HOME}/.local/share/emudeck-favorites-sync"
+rm -f "${HOME}/.local/bin/srm-sync" "${HOME}/.local/bin/emudeck-favorites-sync" \
+      "${HOME}/Desktop/SRM Sync.desktop" "${HOME}/Desktop/EmuDeck Favorites Sync.desktop"
 echo "Programfilene er fjernet. Spillene i Steam og SRM er ikke rørt."
-echo "Lagret tilstand og sikkerhetskopier ligger fortsatt i ~/.local/state/emudeck-favorites-sync."
+echo "Lagret tilstand og sikkerhetskopier ligger fortsatt i ~/.local/state/srm-sync."
