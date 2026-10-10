@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -247,16 +248,44 @@ def shutdown_steam(wait_seconds: int = 90, progress: Callable[[str], None] | Non
     return not steam_running()
 
 
-def start_steam() -> bool:
+def steam_launch_command() -> list[str] | None:
     command = shutil.which("steam")
-    try:
-        if command:
-            subprocess.Popen([command], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-            return True
-        if shutil.which("flatpak"):
-            subprocess.Popen(["flatpak", "run", "com.valvesoftware.Steam"], stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
-            return True
-    except OSError:
+    if command:
+        return [command]
+    if shutil.which("flatpak"):
+        return ["flatpak", "run", "com.valvesoftware.Steam"]
+    return None
+
+
+def in_own_scope(command: list[str]) -> list[str]:
+    """Run ``command`` in its own systemd scope named like a Steam app launch.
+
+    A program started from this one otherwise shares its cgroup, and the desktop
+    (KDE's screen-sharing portal) then attributes Steam's requests to «SRM Sync».
+    """
+    runner = shutil.which("systemd-run")
+    if not runner:
+        return command
+    unit = f"app-steam@{uuid.uuid4().hex[:12]}.scope"
+    return [runner, "--user", "--scope", "--quiet", "--collect", f"--unit={unit}", *command]
+
+
+def start_steam() -> bool:
+    command = steam_launch_command()
+    if command is None:
         return False
+    for attempt in (in_own_scope(command), command):
+        try:
+            process = subprocess.Popen(attempt, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                       start_new_session=True)
+        except OSError:
+            continue
+        if attempt is command:
+            return True
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            return True  # still running: Steam started inside its own scope
+        if process.returncode == 0:
+            return True
     return False

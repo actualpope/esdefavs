@@ -746,6 +746,23 @@ class EntryTests(unittest.TestCase):
         })
 
 
+class SteamStartTests(unittest.TestCase):
+    def test_steam_gets_its_own_scope_named_steam(self) -> None:
+        from unittest import mock
+        from srm_sync import steam
+        with mock.patch.object(steam.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"):
+            command = steam.in_own_scope(["/usr/bin/steam"])
+        self.assertEqual(command[:4], ["/usr/bin/systemd-run", "--user", "--scope", "--quiet"])
+        self.assertTrue(any(part.startswith("--unit=app-steam@") and part.endswith(".scope") for part in command))
+        self.assertEqual(command[-1], "/usr/bin/steam")
+
+    def test_without_systemd_run_steam_starts_plainly(self) -> None:
+        from unittest import mock
+        from srm_sync import steam
+        with mock.patch.object(steam.shutil, "which", return_value=None):
+            self.assertEqual(steam.in_own_scope(["steam"]), ["steam"])
+
+
 class VdfTests(unittest.TestCase):
     def test_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

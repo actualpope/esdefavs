@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.1 — 2026-10-10
+
+- Retter at KDE spurte «Choose which screen to share with SRM Sync» når Steam startet igjen etter Lagre/Fiks. Steam ble startet som en del av SRM Sync, så skrivebordet trodde skjermdelingen kom fra oss. Steam startes nå i sin egen systemd-scope (`app-steam@….scope`), eller som før hvis `systemd-run` mangler.
+
 ## 1.5.0 — 2026-10-10
 
 - **Emulator per spill.** Marker ett eller flere spill i SRM-lista og trykk «Rediger spill» (eller høyreklikk) for å velge hvilken emulator de skal startes med, f.eks. PCSX2 eller en annen for PS2. «Som konsollen» følger konsollens standard. Valget trer i kraft når du trykker Lagre; Steam-navnet du har satt beholdes. Spill med eget valg viser emulatornavnet i lista, og «Fiks» beholder valget.
