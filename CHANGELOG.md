@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.0 — 2026-10-10
+
+- **Emulator per spill.** Marker ett eller flere spill i SRM-lista og trykk «Rediger spill» (eller høyreklikk) for å velge hvilken emulator de skal startes med, f.eks. PCSX2 eller en annen for PS2. «Som konsollen» følger konsollens standard. Valget trer i kraft når du trykker Lagre; Steam-navnet du har satt beholdes. Spill med eget valg viser emulatornavnet i lista, og «Fiks» beholder valget.
+- **Egne emulatorer.** Under «SRM-oppsett» → «Egne emulatorer» kan du legge inn emulatorer SRM ikke har parser for (navn, konsoller, program, argumenter med `${filePath}`). De dukker opp som valg både per spill og som standard per konsoll, og gjør at konsoller uten SRM-parser kan brukes.
+- Standard emulator per konsoll ligger fortsatt i «SRM-oppsett» og gjelder spill uten eget valg.
+- Statuslinja og Lagre-dialogen teller nå også spill som bytter emulator.
+
 ## 1.4.0 — 2026-09-27
 
 - Programmet heter nå **SRM Sync**: vinduet, skrivebordssnarveien, kommandoen `srm-sync` og mappene `~/.local/share/srm-sync` og `~/.local/state/srm-sync`. Lagret spilliste, innstillinger og sikkerhetskopier flyttes automatisk over, og den gamle snarveien fjernes. Parserne i SRM heter nå «SRM Sync - …» (samme interne ID, så SRM kjenner fortsatt igjen spillene).

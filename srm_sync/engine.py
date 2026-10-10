@@ -28,6 +28,7 @@ from .games import (
     PENDING_ADD,
     PENDING_REMOVE,
     GameRecord,
+    effective_emulator,
     entry_from_template,
     entry_template,
     load_games,
@@ -39,12 +40,13 @@ from .srm import (
     M3U_UNSUPPORTED_SYSTEMS,
     SrmError,
     build_entry,
+    emulator_candidates,
     load_parser_preferences,
     load_srm,
     manual_root,
     parser_file,
     select_parser_candidate,
-    parser_candidates,
+    source_template,
     with_owned_parsers,
     write_manifest,
     write_parsers,
@@ -85,6 +87,7 @@ class RunReport:
     removed: list[str] = field(default_factory=list)
     remove_failed: list[tuple[str, str]] = field(default_factory=list)
     fixed: list[str] = field(default_factory=list)
+    changed: list[str] = field(default_factory=list)
     fix_problems: list[tuple[str, str]] = field(default_factory=list)
     srm_runs: list[SrmCliResult] = field(default_factory=list)
     steam_was_running: bool = False
@@ -100,9 +103,12 @@ class RunReport:
             return "Ingen endringer å lagre. Flytt spill mellom listene først."
         lines: list[str] = []
         if self.mode == UPDATE:
-            lines.append(f"{len(self.added)} spill ble lagt til i Steam.")
+            if self.added or not self.changed or self.removed or self.remove_failed:
+                lines.append(f"{len(self.added)} spill ble lagt til i Steam.")
             if self.removed or self.remove_failed:
                 lines.append(f"{len(self.removed)} spill ble fjernet fra Steam.")
+            if self.changed:
+                lines.append(f"{len(self.changed)} spill fikk ny emulator.")
         else:
             lines.append(f"Startinnstillingene ble sjekket for alle spill. {len(self.fixed)} spill fikk oppdaterte verdier.")
         if self.add_failed:
@@ -143,11 +149,16 @@ class _Plan:
     removals: dict[str, list[GameRecord]]
     add_failed: list[tuple[GameRecord, str]]
     fix_problems: list[tuple[GameRecord, str]]
+    retargeted: set[str] = field(default_factory=set)
+    emulator_failed: set[str] = field(default_factory=set)
 
 
 def _plan(config: AppConfig, mode: str, records: list[GameRecord], library: Library, srm: Any) -> _Plan:
     if mode == UPDATE:
-        systems = sorted({r.system for r in records if r.status in {PENDING_ADD, PENDING_REMOVE}})
+        systems = sorted({
+            r.system for r in records
+            if r.status in {PENDING_ADD, PENDING_REMOVE} or (r.status == APPLIED and r.pending_emulator is not None)
+        })
     else:
         systems = sorted({r.system for r in records if r.in_steam})
     preferences = load_parser_preferences(config)
@@ -155,9 +166,8 @@ def _plan(config: AppConfig, mode: str, records: list[GameRecord], library: Libr
     games = library.by_id()
     plan = _Plan(systems=systems, desired={}, removals={}, add_failed=[], fix_problems=[])
     for system in systems:
-        source = select_parser_candidate(
-            parser_candidates(srm.dict_parsers, system, config.roms_dir), preferences.get(system)
-        )
+        candidates = emulator_candidates(config, srm.dict_parsers, system)
+        source = select_parser_candidate(candidates, preferences.get(system))
         template = entry_template(records, games, system) if source is None else None
         desired: list[tuple[GameRecord, dict[str, Any]]] = []
         for record in (r for r in records if r.system == system):
@@ -166,7 +176,9 @@ def _plan(config: AppConfig, mode: str, records: list[GameRecord], library: Libr
                 continue
             if record.status == PENDING_ADD and mode == FIX:
                 continue
-            recompute = record.status == PENDING_ADD or mode == FIX
+            choice = effective_emulator(record, include_pending=mode == UPDATE)
+            retarget = mode == UPDATE and record.status == APPLIED and record.pending_emulator is not None
+            recompute = record.status == PENDING_ADD or mode == FIX or retarget
             entry = record.entry
             if recompute:
                 game = games.get(record.id) if record.rel_path else None
@@ -176,10 +188,15 @@ def _plan(config: AppConfig, mode: str, records: list[GameRecord], library: Libr
                         continue
                     if record.rel_path:
                         plan.fix_problems.append((record, "fant ikke rom-fila"))
+                    if retarget:
+                        plan.emulator_failed.add(record.id)
                 else:
-                    result = build_entry(record.title, game.launch_path, system, source, environment)
+                    game_source = select_parser_candidate(candidates, choice or preferences.get(system))
+                    result = build_entry(record.title, game.launch_path, system, game_source, environment)
                     if result.entry is not None:
                         entry = result.entry
+                        if retarget:
+                            plan.retargeted.add(record.id)
                     elif source is None and template is not None and record.status == PENDING_ADD and not (
                         system in M3U_UNSUPPORTED_SYSTEMS and game.launch_path.casefold().endswith(".m3u")
                     ):
@@ -189,6 +206,8 @@ def _plan(config: AppConfig, mode: str, records: list[GameRecord], library: Libr
                         continue
                     else:
                         plan.fix_problems.append((record, result.problem))
+                        if retarget:
+                            plan.emulator_failed.add(record.id)
             if entry is None:
                 continue
             desired.append((record, entry))
@@ -270,7 +289,7 @@ def _reconcile_steam(
         for record, entry in desired:
             expected = entry_command(entry)
             shortcut = None
-            keep_old_fields = mode == UPDATE and record.status == APPLIED
+            keep_old_fields = mode == UPDATE and record.status == APPLIED and record.id not in plan.retargeted
             if keep_old_fields and record.appid in by_appid:
                 shortcut = by_appid[record.appid]
             if shortcut is None:
@@ -422,10 +441,10 @@ def _run(config: AppConfig, mode: str, report: RunReport, progress: Progress | N
     for system in active:
         if plan.desired.get(system):
             source = select_parser_candidate(
-                parser_candidates(srm.dict_parsers, system, config.roms_dir), preferences.get(system)
+                emulator_candidates(config, srm.dict_parsers, system), preferences.get(system)
             )
             if source is not None:
-                sources[system] = source
+                sources[system] = source_template(srm, system, source)
     owned = srm.owned_parsers()
     missing_parser = [s for s in active if plan.desired.get(s) and s not in owned and s not in sources]
     for system in missing_parser:
@@ -489,10 +508,14 @@ def _run(config: AppConfig, mode: str, report: RunReport, progress: Progress | N
                     report.add_failed.append((_record_label(record), reason + " (prøves igjen neste gang)"))
             else:
                 if entry != record.entry:
-                    report.fixed.append(_record_label(record))
+                    (report.changed if record.id in plan.retargeted else report.fixed).append(_record_label(record))
                 record.entry = entry
                 if record.id in found:
                     record.appid = found[record.id]
+                if mode == UPDATE and record.pending_emulator is not None:
+                    if record.id not in plan.emulator_failed:
+                        record.emulator = record.pending_emulator
+                    record.pending_emulator = None
         updated.append(record)
     records[:] = updated
     save_games(config, records)

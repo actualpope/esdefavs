@@ -25,6 +25,7 @@ from srm_sync.games import (
     move_to_srm,
     pending_changes,
     save_games,
+    set_emulator,
 )
 from srm_sync.library import RomGame, logical_id, scan_library
 from srm_sync.srm import (
@@ -36,6 +37,7 @@ from srm_sync.srm import (
     new_owned_parser,
     parser_extensions,
     read_manifest,
+    save_custom_emulators,
     save_parser_preference,
 )
 from srm_sync.srm_cli import run_srm
@@ -563,9 +565,9 @@ class DiscardTests(Base):
         self.remove(("snes", "Super Game (USA).sfc"))
         config, library = self.library()
         records = load_games(config, library)
-        self.assertEqual(pending_changes(records), (1, 1))
+        self.assertEqual(pending_changes(records), (1, 1, 0))
         discard_changes(records)
-        self.assertEqual(pending_changes(records), (0, 0))
+        self.assertEqual(pending_changes(records), (0, 0, 0))
         self.assertEqual([(r.rel_path, r.status) for r in records], [("Super Game (USA).sfc", APPLIED)])
 
 
@@ -617,6 +619,108 @@ class FixTests(Base):
         self.update(FIX)
         exes = {field(s, "Exe") for s in self.env.shortcuts() if field(s, "AppName") != "Firefox"}
         self.assertTrue(all(exe.startswith('"/usr/bin/bsnes"') for exe in exes), exes)
+
+
+class EmulatorChoiceTests(Base):
+    def setUp(self) -> None:
+        super().setUp()
+        self.env.old_install({"snes": [("Super Game", "Super Game (USA).sfc"), ("Other Game", "Other Game (Europe).smc")]})
+        parsers = self.env.parsers()
+        parsers.append(glob_parser("snes", "Nintendo SNES - bsnes standalone", "/usr/bin/bsnes", '"${filePath}"', ".sfc|.smc"))
+        self.env.write_parsers(parsers)
+
+    def _choose(self, rel_path: str, emulator: str) -> None:
+        config, library = self.library()
+        records = load_games(config, library)
+        record = next(r for r in records if r.rel_path == rel_path)
+        set_emulator(record, emulator)
+        save_games(config, records)
+
+    def exe_of(self, name: str) -> str:
+        return next(field(s, "Exe") for s in self.env.shortcuts() if field(s, "AppName") == name)
+
+    def test_one_game_gets_another_emulator_and_keeps_its_name(self) -> None:
+        shortcuts = self.env.shortcuts()
+        for item in shortcuts:
+            if field(item, "AppName") == "Super Game":
+                set_field(item, "AppName", "Eget navn")
+        write_shortcuts(self.env.vdf, shortcuts)
+        self._choose("Super Game (USA).sfc", "bsnes standalone")
+        config, library = self.library()
+        self.assertEqual(pending_changes(load_games(config, library)), (0, 0, 1))
+        report = self.update()
+        self.assertTrue(report.ok, report.summary())
+        self.assertEqual(len(report.changed), 1)
+        self.assertIn("1 spill fikk ny emulator", report.summary())
+        self.assertNotIn("lagt til i Steam", report.summary())
+        self.assertEqual(self.env.names(), ["Eget navn", "Firefox", "Other Game"])
+        self.assertTrue(self.exe_of("Eget navn").startswith('"/usr/bin/bsnes"'))
+        self.assertNotIn("bsnes", self.exe_of("Other Game"))
+        records = load_games(*self.library())
+        changed = next(r for r in records if r.rel_path == "Super Game (USA).sfc")
+        self.assertEqual((changed.emulator, changed.pending_emulator), ("bsnes standalone", None))
+        self.assertEqual(pending_changes(records), (0, 0, 0))
+
+    def test_back_to_console_default(self) -> None:
+        self._choose("Super Game (USA).sfc", "bsnes standalone")
+        self.update()
+        self._choose("Super Game (USA).sfc", "")
+        self.update()
+        self.assertNotIn("bsnes", self.exe_of("Super Game"))
+
+    def test_choice_survives_fix(self) -> None:
+        self._choose("Super Game (USA).sfc", "bsnes standalone")
+        self.update()
+        self.update(FIX)
+        self.assertTrue(self.exe_of("Super Game").startswith('"/usr/bin/bsnes"'))
+        self.assertNotIn("bsnes", self.exe_of("Other Game"))
+
+    def test_discard_cancels_pending_choice(self) -> None:
+        self._choose("Super Game (USA).sfc", "bsnes standalone")
+        config, library = self.library()
+        records = load_games(config, library)
+        discard_changes(records)
+        self.assertEqual(pending_changes(records), (0, 0, 0))
+
+    def test_choosing_the_current_emulator_is_not_a_change(self) -> None:
+        self._choose("Super Game (USA).sfc", "")
+        config, library = self.library()
+        self.assertEqual(pending_changes(load_games(config, library)), (0, 0, 0))
+
+    def test_new_game_can_start_with_its_own_emulator(self) -> None:
+        self.add(("snes", "Third.sfc"))
+        config, library = self.library()
+        records = load_games(config, library)
+        set_emulator(next(r for r in records if r.rel_path == "Third.sfc"), "bsnes standalone")
+        save_games(config, records)
+        self.update()
+        self.assertTrue(self.exe_of("Third").startswith('"/usr/bin/bsnes"'))
+
+    def test_custom_emulator_is_a_choice_for_its_console(self) -> None:
+        config = self.env.config()
+        save_custom_emulators(config, [{
+            "name": "ARMSX2", "systems": ["snes"], "target": "/opt/armsx2/armsx2",
+            "start_in": "", "args": '--fullscreen "${filePath}"',
+        }])
+        self._choose("Other Game (Europe).smc", "ARMSX2")
+        report = self.update()
+        self.assertTrue(report.ok, report.summary())
+        self.assertTrue(self.exe_of("Other Game").startswith('"/opt/armsx2/armsx2"'))
+        self.assertIn("--fullscreen", self.exe_of("Other Game"))
+
+    def test_custom_emulator_on_new_console_creates_our_parser(self) -> None:
+        (self.env.roms / "saturn").mkdir(exist_ok=True)
+        (self.env.roms / "saturn/Racer.iso").write_bytes(b"x")
+        config = self.env.config()
+        save_custom_emulators(config, [{
+            "name": "ARMSX2", "systems": ["saturn"], "target": "/opt/armsx2/armsx2", "start_in": "", "args": '"${filePath}"',
+        }])
+        self.add(("saturn", "Racer.iso"))
+        report = self.update()
+        self.assertTrue(report.ok, report.summary())
+        self.assertEqual(len(report.added), 1)
+        self.assertTrue(self.exe_of("Racer").startswith('"/opt/armsx2/armsx2"'))
+        self.assertTrue(any(p["parserId"] == f"{OWNED_PARSER_PREFIX}saturn" for p in self.env.parsers()))
 
 
 class EntryTests(unittest.TestCase):

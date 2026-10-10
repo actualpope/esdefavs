@@ -28,6 +28,8 @@ class GameRecord:
     status: str
     entry: dict[str, Any] | None = None
     appid: int | None = None
+    emulator: str = ""
+    pending_emulator: str | None = None
 
     @property
     def in_steam(self) -> bool:
@@ -50,6 +52,8 @@ class GameRecord:
             status=str(data.get("status") or APPLIED),
             entry=data.get("entry") if isinstance(data.get("entry"), dict) else None,
             appid=int(data["appid"]) if isinstance(data.get("appid"), int) else None,
+            emulator=str(data.get("emulator") or ""),
+            pending_emulator=str(data["pending_emulator"]) if data.get("pending_emulator") is not None else None,
         )
 
 
@@ -239,17 +243,35 @@ def entry_from_template(template: tuple[dict[str, Any], str], title: str, launch
     return result
 
 
-def pending_changes(records: list[GameRecord]) -> tuple[int, int]:
+def pending_changes(records: list[GameRecord]) -> tuple[int, int, int]:
+    """(to add, to remove, emulator changes) that «Lagre» would carry out."""
     return (
         sum(1 for r in records if r.status == PENDING_ADD),
         sum(1 for r in records if r.status == PENDING_REMOVE),
+        sum(1 for r in records if r.status == APPLIED and r.pending_emulator is not None),
     )
+
+
+def effective_emulator(record: GameRecord, include_pending: bool) -> str:
+    """The emulator choice for a game: its own, or "" to follow the console."""
+    if include_pending and record.pending_emulator is not None:
+        return record.pending_emulator
+    return record.emulator
+
+
+def set_emulator(record: GameRecord, emulator: str) -> None:
+    """Choose an emulator for one game ("" = follow the console). Takes effect on «Lagre»."""
+    if record.status == APPLIED:
+        record.pending_emulator = None if emulator == record.emulator else emulator
+    else:
+        record.emulator = emulator
 
 
 def discard_changes(records: list[GameRecord]) -> None:
     """Undo every move that has not been saved yet."""
     records[:] = [r for r in records if r.status != PENDING_ADD]
     for record in records:
+        record.pending_emulator = None
         if record.status == PENDING_REMOVE:
             record.status = APPLIED
 

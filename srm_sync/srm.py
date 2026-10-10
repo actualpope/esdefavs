@@ -338,18 +338,91 @@ def select_parser_candidate(
     if not candidates:
         return None
     if preference:
-        preferred = next(
-            (item for item, _ in candidates if preference.casefold() in str(item.get("configTitle", "")).casefold()),
-            None,
+        wanted = preference.casefold()
+        titles = [(item, str(item.get("configTitle", "")).casefold()) for item, _ in candidates]
+        preferred = next((item for item, title in titles if title == wanted), None) or next(
+            (item for item, title in titles if wanted in title), None
         )
         if preferred is not None:
             return preferred
     return candidates[0][0]
 
 
+# ----------------------------------------------------------- own emulators
+
+
+def custom_emulators_path(config: AppConfig) -> Path:
+    return config.state_dir / "custom-emulators.json"
+
+
+def load_custom_emulators(config: AppConfig) -> list[dict[str, Any]]:
+    """Emulators the user has typed in, for consoles SRM has no suitable parser for."""
+    data = read_json(custom_emulators_path(config), [])
+    result: list[dict[str, Any]] = []
+    for item in data if isinstance(data, list) else []:
+        if not isinstance(item, dict) or not str(item.get("name") or "").strip() or not str(item.get("target") or "").strip():
+            continue
+        systems = item.get("systems") if isinstance(item.get("systems"), list) else []
+        result.append({
+            "name": str(item["name"]).strip(),
+            "systems": [str(value).strip().casefold() for value in systems if str(value).strip()],
+            "target": str(item["target"]).strip(),
+            "start_in": str(item.get("start_in") or "").strip(),
+            "args": str(item.get("args") if item.get("args") is not None else '"${filePath}"'),
+        })
+    return result
+
+
+def save_custom_emulators(config: AppConfig, emulators: list[dict[str, Any]]) -> None:
+    write_json_atomic(custom_emulators_path(config), emulators)
+
+
+def custom_parser(emulator: dict[str, Any]) -> dict[str, Any]:
+    """A custom emulator dressed up like an SRM parser, so it flows through the same code."""
+    return {
+        "parserType": "Custom",
+        "configTitle": emulator["name"],
+        "parserId": f"custom:{emulator['name']}",
+        "customEmulator": True,
+        "steamCategories": [],
+        "executable": {"path": emulator["target"], "appendArgsToExecutable": True},
+        "executableArgs": emulator["args"],
+        "startInDirectory": emulator["start_in"],
+        "parserInputs": {},
+    }
+
+
+def is_custom_parser(parser: dict[str, Any]) -> bool:
+    return bool(parser.get("customEmulator"))
+
+
+def emulator_candidates(config: AppConfig, parsers: list[dict[str, Any]], system: str) -> list[tuple[dict[str, Any], int]]:
+    """Every emulator a console's games can use: EmuDeck's SRM parsers, then the user's own."""
+    candidates = parser_candidates(parsers, system, config.roms_dir)
+    seen = {str(item.get("configTitle", "")).casefold() for item, _ in candidates}
+    for emulator in load_custom_emulators(config):
+        if system.casefold() in emulator["systems"] and emulator["name"].casefold() not in seen:
+            candidates.append((custom_parser(emulator), 100))
+    return candidates
+
+
+def source_template(srm: "SrmData", system: str, source: dict[str, Any]) -> dict[str, Any]:
+    """The parser our own SRM parser for a console is copied from.
+
+    A custom emulator is not a real SRM parser, so a console that only has those
+    borrows another real parser's settings (artwork, categories, …) as a base.
+    """
+    if not is_custom_parser(source):
+        return source
+    base = next((p for p in srm.dict_parsers if owned_system(p) is None), None) or {}
+    template = copy.deepcopy(base)
+    template["steamCategories"] = [system.upper()]
+    return template
+
+
 def source_parser(config: AppConfig, srm: SrmData, system: str, preferences: dict[str, str] | None = None) -> dict[str, Any] | None:
     prefs = load_parser_preferences(config) if preferences is None else preferences
-    return select_parser_candidate(parser_candidates(srm.dict_parsers, system, config.roms_dir), prefs.get(system))
+    return select_parser_candidate(emulator_candidates(config, srm.dict_parsers, system), prefs.get(system))
 
 
 # ------------------------------------------------------------ ROM extensions
@@ -544,7 +617,7 @@ def describe_systems(config: AppConfig, srm: SrmData, systems: list[str]) -> lis
     environment = srm.environment
     result: list[SystemParserInfo] = []
     for system in systems:
-        candidates = parser_candidates(srm.dict_parsers, system, config.roms_dir)
+        candidates = emulator_candidates(config, srm.dict_parsers, system)
         info = SystemParserInfo(
             system=system,
             candidates=[str(item.get("configTitle") or item.get("parserId") or "?") for item, _ in candidates],

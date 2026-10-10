@@ -20,21 +20,26 @@ from .games import (
     GameRecord,
     RecordIndex,
     discard_changes,
+    effective_emulator,
     entry_template,
     load_games,
     move_out_of_srm,
     move_to_srm,
     pending_changes,
     save_games,
+    set_emulator,
     undo_remove,
 )
 from .library import Library, RomGame, scan_library
 from .srm import (
     SrmData,
+    build_entry,
     describe_systems,
+    emulator_candidates,
+    load_custom_emulators,
     load_parser_preferences,
     load_srm_or_none,
-    parser_candidates,
+    save_custom_emulators,
     save_parser_preference,
     select_parser_candidate,
     set_preview_setting,
@@ -114,10 +119,17 @@ class App:
         ttk.Button(roms_actions, text="Velg rom-mappe", style="Ghost.TButton", command=self.choose_roms_dir).pack(side="right")
         self.srm_tree, srm_actions = self._panel(outer, 2, "SRM", self.srm_count, self.srm_info)
         ttk.Button(srm_actions, text="SRM-oppsett", style="Ghost.TButton", command=self.open_srm_setup).pack(side="right")
+        self.edit_button = ttk.Button(srm_actions, text="Rediger spill", style="Ghost.TButton", command=self.edit_games)
+        self.edit_button.pack(side="right", padx=(0, 6))
         self.roms_tree.bind("<Double-1>", lambda _: self.move_right())
         self.srm_tree.bind("<Double-1>", lambda _: self.move_left())
         self.roms_tree.bind("<Return>", lambda _: self.move_right())
         self.srm_tree.bind("<Return>", lambda _: self.move_left())
+        self.srm_menu = tk.Menu(self.root, tearoff=0, bg=theme.SURFACE_2, fg=theme.TEXT, activebackground=theme.ACCENT,
+                                activeforeground="#ffffff", bd=0, relief="flat")
+        self.srm_menu.add_command(label="Rediger spill …", command=self.edit_games)
+        self.srm_menu.add_command(label="Fjern fra SRM", command=self.move_left)
+        self.srm_tree.bind("<Button-3>", self._srm_context_menu)
 
         middle = ttk.Frame(outer)
         middle.grid(row=1, column=1, padx=16)
@@ -160,7 +172,7 @@ class App:
         tree.heading("status", text="", anchor="w")
         tree.column("system", width=96, stretch=False, anchor="w")
         tree.column("name", width=280, minwidth=200, stretch=True, anchor="w")
-        tree.column("status", width=132, stretch=False, anchor="w")
+        tree.column("status", width=150, stretch=False, anchor="w")
         tree.tag_configure("new", foreground=theme.SUCCESS)
         tree.tag_configure("remove", foreground=theme.DANGER)
         tree.tag_configure("warn", foreground=theme.WARNING)
@@ -242,7 +254,12 @@ class App:
                 right_rows.append((record.id, record.system, record.display_name, "●  ny", "new"))
             elif record.status == APPLIED:
                 missing = record.id not in found
-                status, tag = ("●  rom mangler", "warn") if missing and not self.library.error else ("", "")
+                if record.pending_emulator is not None:
+                    status, tag = "●  ny emulator", "new"
+                elif missing and not self.library.error:
+                    status, tag = "●  rom mangler", "warn"
+                else:
+                    status, tag = record.emulator, ""
                 right_rows.append((record.id, record.system, record.display_name, status, tag))
 
         self._fill(self.roms_tree, left_rows, needle)
@@ -261,9 +278,12 @@ class App:
         else:
             self.srm_info.set(f"{in_steam} spill i Steam via Steam ROM Manager")
         if not self.busy:
-            adds, removes = pending_changes(self.records)
-            if adds or removes:
-                self._set_status(f"Ikke lagret: {adds} legges til, {removes} fjernes. Trykk «Lagre».", theme.WARNING)
+            adds, removes, changes = pending_changes(self.records)
+            if adds or removes or changes:
+                parts = [f"{adds} legges til", f"{removes} fjernes"]
+                if changes:
+                    parts.append(f"{changes} bytter emulator")
+                self._set_status(f"Ikke lagret: {', '.join(parts)}. Trykk «Lagre».", theme.WARNING)
             else:
                 self._set_status("Alt er lagret.", theme.SUCCESS)
             self._update_buttons()
@@ -295,9 +315,9 @@ class App:
             return "SRM-oppsettet ble ikke funnet"
         preferences = load_parser_preferences(self.config)
         if select_parser_candidate(
-            parser_candidates(self.srm.dict_parsers, game.system, self.config.roms_dir), preferences.get(game.system)
+            emulator_candidates(self.config, self.srm.dict_parsers, game.system), preferences.get(game.system)
         ) is None and entry_template(self.records, self.library.by_id(), game.system) is None:
-            return f"ingen SRM-parser for «{game.system}»"
+            return f"ingen emulator for «{game.system}» (legg til en under «SRM-oppsett» → «Egne emulatorer»)"
         return ""
 
     def move_right(self) -> None:
@@ -331,6 +351,31 @@ class App:
             move_out_of_srm(self.records, item)
         self._save_and_refresh()
 
+    def _srm_context_menu(self, event: tk.Event) -> None:
+        row = self.srm_tree.identify_row(event.y)
+        if not row or self.busy:
+            return
+        if row not in self.srm_tree.selection():
+            self.srm_tree.selection_set(row)
+        self.srm_menu.tk_popup(event.x_root, event.y_root)
+
+    def edit_games(self) -> None:
+        if self.busy:
+            return
+        chosen = {item for item in self.srm_tree.selection()}
+        records = [r for r in self.records if r.id in chosen and r.status in {APPLIED, PENDING_ADD}]
+        if not records:
+            theme.info(self.root, "Rediger spill", "Velg ett eller flere spill i SRM-lista først.")
+            return
+        if len({r.system for r in records}) > 1:
+            theme.info(self.root, "Rediger spill", "Velg spill fra én konsoll om gangen.")
+            return
+        if self.srm is None:
+            theme.info(self.root, "Rediger spill", "Fant ikke SRM-oppsettet.", kind="warning")
+            return
+        if GameEditor(self, records).saved:
+            self._save_and_refresh()
+
     def _save_and_refresh(self) -> None:
         save_games(self.config, self.records)
         self.refresh()
@@ -341,7 +386,7 @@ class App:
         self.busy = busy
         state = "disabled" if busy else "normal"
         for button in (self.update_button, self.reset_button, self.fix_button, self.program_button,
-                       self.right_button, self.left_button):
+                       self.right_button, self.left_button, self.edit_button):
             button.configure(state=state)
         self.root.configure(cursor="watch" if busy else "")
         if busy:
@@ -394,10 +439,14 @@ class App:
         self.events.put(lambda: self._set_status(text, theme.ACCENT))
 
     def start_update(self) -> None:
-        adds, removes = pending_changes(self.records)
-        if not adds and not removes:
+        adds, removes, changes = pending_changes(self.records)
+        if not adds and not removes and not changes:
             return
-        text = f"{adds} spill legges til og {removes} fjernes.\n\nSteam lukkes mens dette pågår, og startes igjen etterpå."
+        text = f"{adds} spill legges til og {removes} fjernes."
+        if changes:
+            text += (f"\n\n{changes} spill bytter emulator. Steam kan se dem som nye spill, så spilletid kan starte på nytt. "
+                     "Navnet du har satt i Steam beholdes.")
+        text += "\n\nSteam lukkes mens dette pågår, og startes igjen etterpå."
         if removes:
             text += "\n\nSpill som fjernes forsvinner fra Steam, sammen med spilletid og bilder der."
         if theme.confirm(self.root, "Lagre endringer", text, ok_text="Lagre"):
@@ -524,6 +573,8 @@ class SrmSetup(tk.Toplevel):
         ttk.Button(header, text="Lukk", command=self.close).pack(side="right")
         ttk.Button(header, text="Lagre feilsøkingsrapport", style="Ghost.TButton",
                    command=self.save_report).pack(side="right", padx=(0, 10))
+        ttk.Button(header, text="Egne emulatorer", style="Ghost.TButton",
+                   command=self.open_emulators).pack(side="right", padx=(0, 10))
 
         top = ttk.Frame(body)
         top.pack(fill="x", pady=(0, 16))
@@ -570,7 +621,8 @@ class SrmSetup(tk.Toplevel):
         head = ttk.Frame(list_card, style="Card.TFrame", padding=(18, 16, 18, 4))
         head.pack(fill="x")
         ttk.Label(head, text="Emulator per konsoll", style="CardTitle.TLabel").pack(anchor="w")
-        ttk.Label(head, text="Gjelder nye spill. Trykk «Fiks» etterpå hvis spill som allerede er lagt til skal bytte emulator.",
+        ttk.Label(head, text="Standard for konsollen. Gjelder nye spill, og spill uten eget emulatorvalg etter «Fiks». "
+                       "Enkeltspill kan få en annen emulator med «Rediger spill».",
                   style="CardMuted.TLabel").pack(anchor="w", pady=(2, 10))
         theme.divider(list_card).pack(fill="x")
 
@@ -588,7 +640,7 @@ class SrmSetup(tk.Toplevel):
             canvas.bind_all(sequence, lambda _event, d=delta: canvas.yview_scroll(d, "units"))
         canvas.bind_all("<MouseWheel>", lambda event: canvas.yview_scroll(-1 if event.delta > 0 else 1, "units"))
 
-        for column, heading in enumerate(("KONSOLL", "SRM-PARSER (KILDE)", "EMULATOR", "VÅR PARSER I SRM")):
+        for column, heading in enumerate(("KONSOLL", "STANDARD EMULATOR", "PROGRAM", "VÅR PARSER I SRM")):
             ttk.Label(grid, text=heading, style="CardHead.TLabel").grid(row=0, column=column, sticky="w", padx=(0, 22), pady=(0, 8))
         systems = sorted(
             {game.system for game in self.app.library.games} | {r.system for r in self.app.records},
@@ -611,7 +663,7 @@ class SrmSetup(tk.Toplevel):
                 ttk.Label(grid, text="som spillene som allerede er lagt til", style="Warn.Card.TLabel").grid(
                     row=index, column=1, sticky="w", padx=(0, 22))
             else:
-                ttk.Label(grid, text="ingen parser", style="Bad.Card.TLabel").grid(row=index, column=1, sticky="w", padx=(0, 22))
+                ttk.Label(grid, text="ingen emulator", style="Bad.Card.TLabel").grid(row=index, column=1, sticky="w", padx=(0, 22))
             ttk.Label(grid, text=info.problem or info.target,
                       style="Bad.Card.TLabel" if info.problem else "CardMuted.TLabel").grid(
                 row=index, column=2, sticky="w", padx=(0, 22))
@@ -655,6 +707,10 @@ class SrmSetup(tk.Toplevel):
             theme.info(self, "SRM-oppsett", str(error), kind="error")
         self.render()
 
+    def open_emulators(self) -> None:
+        EmulatorEditor(self)
+        self.render()
+
     def choose_parser(self, system: str, title: str) -> None:
         save_parser_preference(self.app.config, system, title)
         self.render()
@@ -666,6 +722,279 @@ class SrmSetup(tk.Toplevel):
             theme.info(self, "Feilsøkingsrapport", str(error), kind="error")
             return
         theme.info(self, "Feilsøkingsrapport", f"Rapporten er lagret her:\n{path}", kind="success")
+
+
+class GameEditor(tk.Toplevel):
+    """Choose which emulator launches one game (or a few games from the same console)."""
+
+    DEFAULT = "Som konsollen"
+
+    def __init__(self, app: App, records: list[GameRecord]) -> None:
+        super().__init__(app.root)
+        self.app = app
+        self.records = records
+        self.saved = False
+        self.system = records[0].system
+        srm = app.srm
+        assert srm is not None
+        self.candidates = emulator_candidates(app.config, srm.dict_parsers, self.system)
+        self.titles = [str(item.get("configTitle") or "?") for item, _ in self.candidates]
+        preferences = load_parser_preferences(app.config)
+        default = select_parser_candidate(self.candidates, preferences.get(self.system))
+        self.default_title = str(default.get("configTitle") or "?") if default else ""
+        self.environment = srm.environment
+
+        self.withdraw()
+        self.title("Rediger spill")
+        self.configure(bg=theme.BORDER)
+        self.resizable(False, False)
+        self.transient(app.root)
+        frame = ttk.Frame(self, style="Card.TFrame", padding=(26, 22, 26, 20))
+        frame.pack(fill="both", expand=True, padx=1, pady=1)
+        name = records[0].display_name if len(records) == 1 else f"{len(records)} spill"
+        ttk.Label(frame, text=name, style="CardTitle.TLabel", wraplength=480, justify="left").pack(anchor="w")
+        ttk.Label(frame, text=self.system.upper(), style="CardMuted.TLabel").pack(anchor="w", pady=(2, 16))
+        ttk.Label(frame, text="EMULATOR", style="CardHead.TLabel").pack(anchor="w", pady=(0, 6))
+
+        options = [f"{self.DEFAULT} ({self.default_title})" if self.default_title else self.DEFAULT, *self.titles]
+        current = effective_emulator(records[0], include_pending=True)
+        start = options[0]
+        if current:
+            match = next((t for t in self.titles if t.casefold() == current.casefold()), None)
+            start = match or options[0]
+        self.value = tk.StringVar(value=start)
+        box = ttk.Combobox(frame, textvariable=self.value, values=options, state="readonly", width=52)
+        box.pack(anchor="w")
+        box.bind("<<ComboboxSelected>>", lambda _event: self._preview())
+        self.options = options
+        self.preview = ttk.Label(frame, text="", style="CardMuted.TLabel", wraplength=480, justify="left")
+        self.preview.pack(anchor="w", pady=(10, 0))
+        ttk.Label(
+            frame, style="CardMuted.TLabel", wraplength=480, justify="left",
+            text="Endringen trer i kraft når du trykker «Lagre». Steam kan se spillet som nytt (spilletid starter på nytt), "
+                 "men navnet du har satt i Steam beholdes.",
+        ).pack(anchor="w", pady=(14, 0))
+
+        buttons = ttk.Frame(frame, style="Card.TFrame")
+        buttons.pack(fill="x", pady=(20, 0))
+        ttk.Button(buttons, text="Bruk", style="Accent.TButton", command=self._apply).pack(side="right")
+        ttk.Button(buttons, text="Avbryt", style="Secondary.TButton", command=self.destroy).pack(side="right", padx=(0, 10))
+        self.bind("<Escape>", lambda _: self.destroy())
+        self._preview()
+
+        self.update_idletasks()
+        owner = app.root
+        x = owner.winfo_rootx() + max(0, (owner.winfo_width() - self.winfo_reqwidth()) // 2)
+        y = owner.winfo_rooty() + max(0, (owner.winfo_height() - self.winfo_reqheight()) // 3)
+        self.geometry(f"+{x}+{y}")
+        self.deiconify()
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+        self.wait_window()
+
+    def _selected_title(self) -> str:
+        """The chosen emulator's name, or "" for «Som konsollen»."""
+        index = self.options.index(self.value.get()) if self.value.get() in self.options else 0
+        return "" if index == 0 else self.options[index]
+
+    def _preview(self) -> None:
+        title = self._selected_title() or self.default_title
+        parser = next((item for item, _ in self.candidates if str(item.get("configTitle") or "?") == title), None)
+        if parser is None:
+            self.preview.configure(text="Ingen emulator tilgjengelig for denne konsollen.", style="Bad.Card.TLabel")
+            return
+        result = build_entry("test", "/test.rom", self.system, parser, self.environment)
+        if result.entry is None and "m3u" not in result.problem:
+            self.preview.configure(text=result.problem, style="Bad.Card.TLabel")
+        else:
+            target = str(result.entry["target"]) if result.entry else ""
+            self.preview.configure(text=f"Starter med: {target}" if target else "", style="CardMuted.TLabel")
+
+    def _apply(self) -> None:
+        if not self.titles:
+            self.destroy()
+            return
+        title = self._selected_title()
+        for record in self.records:
+            set_emulator(record, title)
+        self.saved = True
+        self.destroy()
+
+
+class EmulatorEditor(tk.Toplevel):
+    """Emulators typed in by hand, for consoles/emulators SRM has no parser for (e.g. ARMSX2)."""
+
+    def __init__(self, setup: SrmSetup) -> None:
+        super().__init__(setup)
+        self.setup = setup
+        self.app = setup.app
+        self.config = setup.app.config
+        self.emulators = load_custom_emulators(self.config)
+        self.selected: int | None = None
+        self.fields = {key: tk.StringVar() for key in ("name", "systems", "target", "start_in", "args")}
+
+        self.withdraw()
+        self.title("Egne emulatorer")
+        self.configure(bg=theme.BG)
+        self.geometry("900x520")
+        self.transient(setup)
+        body = ttk.Frame(self, padding=(24, 20, 24, 18))
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1, uniform="cols")
+        body.columnconfigure(1, weight=2, uniform="cols")
+        body.rowconfigure(1, weight=1)
+        header = ttk.Frame(body)
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 16))
+        ttk.Label(header, text="Egne emulatorer", style="Title.TLabel").pack(side="left")
+        ttk.Button(header, text="Lukk", command=self.destroy).pack(side="right")
+
+        list_outer, list_card = theme.card(body)
+        list_outer.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
+        self.tree = ttk.Treeview(list_card, columns=("name", "systems"), show="headings", selectmode="browse")
+        self.tree.heading("name", text="NAVN", anchor="w")
+        self.tree.heading("systems", text="KONSOLL", anchor="w")
+        self.tree.column("name", width=140, anchor="w")
+        self.tree.column("systems", width=80, anchor="w")
+        self.tree.pack(fill="both", expand=True, padx=8, pady=8)
+        self.tree.bind("<<TreeviewSelect>>", lambda _: self._select())
+
+        form_outer, form = theme.card(body)
+        form_outer.grid(row=1, column=1, sticky="nsew", padx=(8, 0))
+        form.configure(padding=(18, 16))
+        form.columnconfigure(0, weight=1)
+        rows = (
+            ("name", "NAVN (f.eks. ARMSX2)", None),
+            ("systems", "KONSOLLER (mappenavn, kommaseparert, f.eks. ps2)", None),
+            ("target", "PROGRAM (full sti til emulatoren)", self._browse),
+            ("start_in", "STARTMAPPE (valgfri)", None),
+            ("args", "ARGUMENTER (${filePath} byttes ut med spillfila)", None),
+        )
+        for index, (key, label, browse) in enumerate(rows):
+            ttk.Label(form, text=label, style="CardHead.TLabel").grid(row=index * 2, column=0, sticky="w", pady=(0 if index == 0 else 10, 4))
+            line = ttk.Frame(form, style="Card.TFrame")
+            line.grid(row=index * 2 + 1, column=0, sticky="ew")
+            line.columnconfigure(0, weight=1)
+            ttk.Entry(line, textvariable=self.fields[key], style="Search.TEntry").grid(row=0, column=0, sticky="ew")
+            if browse:
+                ttk.Button(line, text="Velg fil", style="Ghost.TButton", command=browse).grid(row=0, column=1, padx=(8, 0))
+        buttons = ttk.Frame(form, style="Card.TFrame")
+        buttons.grid(row=len(rows) * 2, column=0, sticky="ew", pady=(20, 0))
+        ttk.Button(buttons, text="Lagre emulator", style="Accent.TButton", command=self._save).pack(side="right")
+        ttk.Button(buttons, text="Ny", style="Secondary.TButton", command=self._new).pack(side="right", padx=(0, 10))
+        ttk.Button(buttons, text="Slett", style="Ghost.TButton", command=self._delete).pack(side="left")
+        self.hint = ttk.Label(form, text="", style="CardMuted.TLabel", wraplength=470, justify="left")
+        self.hint.grid(row=len(rows) * 2 + 1, column=0, sticky="w", pady=(10, 0))
+
+        self._new()
+        self._fill()
+        self.update_idletasks()
+        self.deiconify()
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+        self.wait_window()
+
+    def _fill(self) -> None:
+        self.tree.delete(*self.tree.get_children())
+        for index, emulator in enumerate(self.emulators):
+            self.tree.insert("", "end", iid=str(index), values=(emulator["name"], ", ".join(emulator["systems"])))
+        if self.selected is not None and self.selected < len(self.emulators):
+            self.tree.selection_set(str(self.selected))
+
+    def _new(self) -> None:
+        self.selected = None
+        for key, var in self.fields.items():
+            var.set('"${filePath}"' if key == "args" else "")
+        self.hint.configure(text="Fyll ut feltene og trykk «Lagre emulator». Den dukker så opp som valg under «Rediger spill» "
+                                 "og som standard under «SRM-oppsett».", style="CardMuted.TLabel")
+        if self.tree.selection():
+            self.tree.selection_remove(*self.tree.selection())
+
+    def _select(self) -> None:
+        picked = self.tree.selection()
+        if not picked:
+            return
+        self.selected = int(picked[0])
+        emulator = self.emulators[self.selected]
+        self.fields["name"].set(emulator["name"])
+        self.fields["systems"].set(", ".join(emulator["systems"]))
+        self.fields["target"].set(emulator["target"])
+        self.fields["start_in"].set(emulator["start_in"])
+        self.fields["args"].set(emulator["args"])
+
+    def _browse(self) -> None:
+        chosen = filedialog.askopenfilename(parent=self, title="Velg emulatoren", initialdir=str(self.config.home))
+        if chosen:
+            self.fields["target"].set(chosen)
+
+    def _problem(self, name: str, systems: list[str], target: str) -> str:
+        if not name:
+            return "Skriv inn et navn."
+        if not systems:
+            return "Skriv inn minst én konsoll (mappenavnet i rom-mappa, f.eks. ps2)."
+        if not target:
+            return "Velg emulatorprogrammet."
+        taken = {e["name"].casefold() for i, e in enumerate(self.emulators) if i != self.selected}
+        if name.casefold() in taken:
+            return "Det finnes allerede en emulator med dette navnet."
+        return ""
+
+    def _save(self) -> None:
+        name = self.fields["name"].get().strip()
+        systems = [value.strip().casefold() for value in self.fields["systems"].get().replace(";", ",").split(",") if value.strip()]
+        target = self.fields["target"].get().strip()
+        problem = self._problem(name, systems, target)
+        if problem:
+            self.hint.configure(text=problem, style="Bad.Card.TLabel")
+            return
+        emulator = {
+            "name": name, "systems": systems, "target": target,
+            "start_in": self.fields["start_in"].get().strip(), "args": self.fields["args"].get(),
+        }
+        if self.selected is None:
+            self.emulators.append(emulator)
+            self.selected = len(self.emulators) - 1
+        else:
+            old = self.emulators[self.selected]["name"]
+            self.emulators[self.selected] = emulator
+            if old != name:
+                self._rename_in_games(old, name)
+        save_custom_emulators(self.config, self.emulators)
+        self._fill()
+        self.hint.configure(text="Lagret.", style="Ok.Card.TLabel")
+
+    def _rename_in_games(self, old: str, new: str) -> None:
+        for record in self.app.records:
+            if record.emulator.casefold() == old.casefold():
+                record.emulator = new
+            if record.pending_emulator and record.pending_emulator.casefold() == old.casefold():
+                record.pending_emulator = new
+        save_games(self.config, self.app.records)
+
+    def _delete(self) -> None:
+        if self.selected is None:
+            return
+        emulator = self.emulators[self.selected]
+        users = [r for r in self.app.records if emulator["name"].casefold() in {r.emulator.casefold(), (r.pending_emulator or "").casefold()}]
+        text = f"Slette «{emulator['name']}»?"
+        if users:
+            text += (f"\n\n{len(users)} spill bruker den. De beholder startkommandoen de har nå, "
+                     "men følger konsollens standard neste gang du trykker «Fiks».")
+        if not theme.confirm(self, "Egne emulatorer", text, ok_text="Slett"):
+            return
+        del self.emulators[self.selected]
+        for record in users:
+            if record.emulator.casefold() == emulator["name"].casefold():
+                record.emulator = ""
+            if (record.pending_emulator or "").casefold() == emulator["name"].casefold():
+                record.pending_emulator = None
+        save_games(self.config, self.app.records)
+        save_custom_emulators(self.config, self.emulators)
+        self._new()
+        self._fill()
 
 
 def main(argv: list[str] | None = None) -> int:
